@@ -817,6 +817,20 @@ pub fn main(model_file: Option<&str>) -> Result<(), String> {
             .map_err(|e| e.to_string())?,
         None => crate::load_model(false)?,
     };
+    // A demo opened inside an existing Herdr session must use fictional pane identities.
+    let pane = if crate::config::get().demo {
+        pane.filter(|id| model.sessions.iter().any(|s| &s.pane == id))
+            .or_else(|| {
+                model
+                    .sessions
+                    .iter()
+                    .find(|s| s.focused)
+                    .or_else(|| model.sessions.first())
+                    .map(|s| s.pane.clone())
+            })
+    } else {
+        pane
+    };
     let (rows, hit) = render(&model, pane.as_deref(), width, height, zoom, drag);
     let mut cells: Vec<(i64, i64, String)> = hit.into_iter().map(|((x, y), b)| (x, y, b)).collect();
     cells.sort();

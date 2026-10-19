@@ -44,9 +44,15 @@ class CLITests(unittest.TestCase):
         self.assertEqual(self.command("--demo", "report").stdout, "#102 Search")
         self.assertIn("search", self.data("--demo", "commits", "feat/search")[0][3])
 
+    def test_demo_uses_fictional_position_inside_an_existing_session(self):
+        from rich.text import Text
+        result = self.command("--demo", "minimap", HERDR_ACTIVE_PANE_ID="w9:p9")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("#102", Text.from_ansi(result.stdout).plain.splitlines()[-1])
+
     def test_help_and_version_need_no_configuration(self):
         self.assertEqual(self.command("--help").returncode, 0)
-        self.assertIn("0.1.0-alpha.1", self.command("--version").stdout)
+        self.assertIn("0.1.0-alpha.2", self.command("--version").stdout)
         self.assertFalse((self.root / "cache").exists())
 
     def test_frames_survive_other_views(self):

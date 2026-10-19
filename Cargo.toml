@@ -1,6 +1,6 @@
 [package]
 name = "prmap"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2021"
 description = "A PR stack minimap with live coding-agent positions"
 license = "Apache-2.0"

@@ -1,6 +1,6 @@
 # PR Map
 
-Last updated on 2026-10-19 at commit `c8dc1ab`.
+Last updated on 2026-10-19 at commit `c64a442`.
 
 A terminal map of pull-request stacks and the coding agents working on them. See where a session
 is working, follow a stack, and open the full map from a small panel between Herdr's Spaces and
@@ -9,7 +9,8 @@ Agents sections.
 ![Full map with fictional application PRs and sessions](docs/images/full-map.png)
 
 Every screenshot uses the bundled **fictional `example/harbor` project**. The demo runs offline;
-it does not inspect your repositories, GitHub account or agent transcripts.
+it does not inspect your repositories, GitHub account or agent transcripts. When opened inside
+an existing Herdr session, it uses fictional pane identities for the demo position.
 
 ## Try the demo
 
@@ -145,7 +146,7 @@ python3 -m pip install -c requirements.lock .
 PRMAP_TEST_BIN="$PWD/target/debug/prmap" python3 -m unittest discover -s tests -v
 ```
 
-The alpha candidate passed strict Rust formatting/clippy, three backend unit tests and seven
+The alpha candidate passed strict Rust formatting/clippy, three backend unit tests and eight
 isolated CLI/Textual tests. An isolated native Herdr test also verified a mouse click end to end,
 including the accepted frame id and the selected fictional station. Its fork passed 143 sidebar
 tests, 10 command-runner tests and 20 configuration/UI architecture checks.
