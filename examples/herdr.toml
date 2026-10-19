@@ -1,0 +1,15 @@
+# Merge this section into your Herdr minimap fork config. Put pr-map on PATH first.
+[ui.sidebar.panel]
+title = "pr map"
+command = "pr-map --minimap"
+rows = 12
+interval_seconds = 5
+timeout_seconds = 5
+click_command = "pr-map --popup"
+click_width = "95%"
+click_height = "90%"
+zoom_levels = 3
+zoom = 1
+
+# For a fully offline demonstration, change command to "pr-map --demo --minimap"
+# and click_command to "pr-map --demo --popup". Every station/session is fictional.

@@ -1,0 +1,417 @@
+{
+  "repo": "example/harbor",
+  "git": "/demo/harbor",
+  "fetched_at": 1768478400.0,
+  "nodes": {
+    "main": {
+      "branch": "main",
+      "name": "main",
+      "parent": null,
+      "kind": "base",
+      "pr": null,
+      "title": {
+        "tags": [
+          "App: None",
+          ""
+        ],
+        "domain": "App",
+        "category": null,
+        "stage": "",
+        "position": null,
+        "summary": ""
+      },
+      "synced": null,
+      "commits": null,
+      "head": null,
+      "base_oid": null,
+      "stage_label": "Dev",
+      "hints": []
+    },
+    "feat/accounts": {
+      "branch": "feat/accounts",
+      "name": "Accounts",
+      "parent": "main",
+      "kind": "pr",
+      "pr": {
+        "number": 101,
+        "title": "[App: Accounts] [Ready] Add account sign-in",
+        "headRefName": "feat/accounts",
+        "baseRefName": "main",
+        "headRefOid": "0000000000000000000000000000000000000065",
+        "baseRefOid": "0000000000000000000000000000000000000064",
+        "isDraft": false,
+        "reviewDecision": "APPROVED",
+        "url": "https://github.com/example/harbor/pull/101",
+        "updatedAt": "2026-01-15T12:00:00Z",
+        "state": "OPEN",
+        "closedAt": null
+      },
+      "title": {
+        "tags": [
+          "App: Accounts",
+          "Ready"
+        ],
+        "domain": "App",
+        "category": "Accounts",
+        "stage": "ready",
+        "position": null,
+        "summary": "Add account sign-in"
+      },
+      "synced": true,
+      "commits": 3,
+      "head": null,
+      "base_oid": null,
+      "stage_label": "Ready",
+      "hints": []
+    },
+    "feat/search": {
+      "branch": "feat/search",
+      "name": "Search",
+      "parent": "main",
+      "kind": "pr",
+      "pr": {
+        "number": 102,
+        "title": "[App: Search] [Developing] Improve document search",
+        "headRefName": "feat/search",
+        "baseRefName": "main",
+        "headRefOid": "0000000000000000000000000000000000000066",
+        "baseRefOid": "0000000000000000000000000000000000000065",
+        "isDraft": false,
+        "reviewDecision": "",
+        "url": "https://github.com/example/harbor/pull/102",
+        "updatedAt": "2026-01-15T12:00:00Z",
+        "state": "OPEN",
+        "closedAt": null
+      },
+      "title": {
+        "tags": [
+          "App: Search",
+          "Developing"
+        ],
+        "domain": "App",
+        "category": "Search",
+        "stage": "developing",
+        "position": null,
+        "summary": "Improve document search"
+      },
+      "synced": true,
+      "commits": 3,
+      "head": null,
+      "base_oid": null,
+      "stage_label": "Dev",
+      "hints": []
+    },
+    "feat/index": {
+      "branch": "feat/index",
+      "name": "Index",
+      "parent": "feat/search",
+      "kind": "pr",
+      "pr": {
+        "number": 103,
+        "title": "[App: Index] [Evaluating] Build a search index",
+        "headRefName": "feat/index",
+        "baseRefName": "feat/search",
+        "headRefOid": "0000000000000000000000000000000000000067",
+        "baseRefOid": "0000000000000000000000000000000000000066",
+        "isDraft": false,
+        "reviewDecision": "",
+        "url": "https://github.com/example/harbor/pull/103",
+        "updatedAt": "2026-01-15T12:00:00Z",
+        "state": "OPEN",
+        "closedAt": null
+      },
+      "title": {
+        "tags": [
+          "App: Index",
+          "Evaluating"
+        ],
+        "domain": "App",
+        "category": "Index",
+        "stage": "evaluating",
+        "position": null,
+        "summary": "Build a search index"
+      },
+      "synced": true,
+      "commits": 3,
+      "head": null,
+      "base_oid": null,
+      "stage_label": "Eval",
+      "hints": []
+    },
+    "feat/cache": {
+      "branch": "feat/cache",
+      "name": "Cache",
+      "parent": "feat/index",
+      "kind": "pr",
+      "pr": {
+        "number": 104,
+        "title": "[App: Cache] [Planning] Cache query results",
+        "headRefName": "feat/cache",
+        "baseRefName": "feat/index",
+        "headRefOid": "0000000000000000000000000000000000000068",
+        "baseRefOid": "0000000000000000000000000000000000000067",
+        "isDraft": true,
+        "reviewDecision": "",
+        "url": "https://github.com/example/harbor/pull/104",
+        "updatedAt": "2026-01-15T12:00:00Z",
+        "state": "OPEN",
+        "closedAt": null
+      },
+      "title": {
+        "tags": [
+          "App: Cache",
+          "Planning"
+        ],
+        "domain": "App",
+        "category": "Cache",
+        "stage": "planning",
+        "position": null,
+        "summary": "Cache query results"
+      },
+      "synced": false,
+      "commits": 3,
+      "head": null,
+      "base_oid": null,
+      "stage_label": "Plan",
+      "hints": [
+        "base has new commits"
+      ]
+    },
+    "feat/payments": {
+      "branch": "feat/payments",
+      "name": "Payments",
+      "parent": "main",
+      "kind": "pr",
+      "pr": {
+        "number": 105,
+        "title": "[App: Payments] [Developing] Add checkout flow",
+        "headRefName": "feat/payments",
+        "baseRefName": "main",
+        "headRefOid": "0000000000000000000000000000000000000069",
+        "baseRefOid": "0000000000000000000000000000000000000068",
+        "isDraft": false,
+        "reviewDecision": "",
+        "url": "https://github.com/example/harbor/pull/105",
+        "updatedAt": "2026-01-15T12:00:00Z",
+        "state": "OPEN",
+        "closedAt": null
+      },
+      "title": {
+        "tags": [
+          "App: Payments",
+          "Developing"
+        ],
+        "domain": "App",
+        "category": "Payments",
+        "stage": "developing",
+        "position": null,
+        "summary": "Add checkout flow"
+      },
+      "synced": true,
+      "commits": 3,
+      "head": null,
+      "base_oid": null,
+      "stage_label": "Dev",
+      "hints": []
+    },
+    "feat/receipts": {
+      "branch": "feat/receipts",
+      "name": "Receipts",
+      "parent": "feat/payments",
+      "kind": "pr",
+      "pr": {
+        "number": 106,
+        "title": "[App: Receipts] [Planning] Email purchase receipts",
+        "headRefName": "feat/receipts",
+        "baseRefName": "feat/payments",
+        "headRefOid": "000000000000000000000000000000000000006a",
+        "baseRefOid": "0000000000000000000000000000000000000069",
+        "isDraft": true,
+        "reviewDecision": "",
+        "url": "https://github.com/example/harbor/pull/106",
+        "updatedAt": "2026-01-15T12:00:00Z",
+        "state": "OPEN",
+        "closedAt": null
+      },
+      "title": {
+        "tags": [
+          "App: Receipts",
+          "Planning"
+        ],
+        "domain": "App",
+        "category": "Receipts",
+        "stage": "planning",
+        "position": null,
+        "summary": "Email purchase receipts"
+      },
+      "synced": true,
+      "commits": 3,
+      "head": null,
+      "base_oid": null,
+      "stage_label": "Plan",
+      "hints": []
+    },
+    "fix/theme": {
+      "branch": "fix/theme",
+      "name": "Theme",
+      "parent": "main",
+      "kind": "pr",
+      "pr": {
+        "number": 107,
+        "title": "[App: Theme] [Fix] Polish the terminal palette",
+        "headRefName": "fix/theme",
+        "baseRefName": "main",
+        "headRefOid": "000000000000000000000000000000000000006b",
+        "baseRefOid": "000000000000000000000000000000000000006a",
+        "isDraft": false,
+        "reviewDecision": "",
+        "url": "https://github.com/example/harbor/pull/107",
+        "updatedAt": "2026-01-15T12:00:00Z",
+        "state": "CLOSED",
+        "closedAt": "2026-01-15T12:00:00Z"
+      },
+      "title": {
+        "tags": [
+          "App: Theme",
+          "Fix"
+        ],
+        "domain": "App",
+        "category": "Theme",
+        "stage": "fix",
+        "position": null,
+        "summary": "Polish the terminal palette"
+      },
+      "synced": true,
+      "commits": 3,
+      "head": null,
+      "base_oid": null,
+      "stage_label": "closed",
+      "hints": []
+    }
+  },
+  "sessions": [
+    {
+      "pane": "w1:p1",
+      "label": "search-dev",
+      "agent": "claude",
+      "status": "working",
+      "title": "Search Dev",
+      "focused": true,
+      "current": "feat/search",
+      "how": "changed",
+      "since": 1768478400.0,
+      "recent": null,
+      "earlier": [],
+      "evidence": {
+        "feat/search": [
+          [
+            1768478400.0,
+            "changed",
+            "Edit src/search.rs"
+          ]
+        ]
+      },
+      "commit_calls": [],
+      "last": 1768478400.0,
+      "badge": "BS",
+      "station": "#102 Search"
+    },
+    {
+      "pane": "w1:p2",
+      "label": "index-qa",
+      "agent": "codex",
+      "status": "blocked",
+      "title": "Index Qa",
+      "focused": false,
+      "current": "feat/index",
+      "how": "changed",
+      "since": 1768478400.0,
+      "recent": null,
+      "earlier": [],
+      "evidence": {
+        "feat/index": [
+          [
+            1768478400.0,
+            "changed",
+            "Edit src/index.rs"
+          ]
+        ]
+      },
+      "commit_calls": [],
+      "last": 1768478400.0,
+      "badge": "CI",
+      "station": "#103 Index"
+    },
+    {
+      "pane": "w1:p3",
+      "label": "payments",
+      "agent": "claude",
+      "status": "idle",
+      "title": "Payments",
+      "focused": false,
+      "current": "feat/payments",
+      "how": "changed",
+      "since": 1768478400.0,
+      "recent": null,
+      "earlier": [],
+      "evidence": {
+        "feat/payments": [
+          [
+            1768478400.0,
+            "changed",
+            "Edit src/payments.rs"
+          ]
+        ]
+      },
+      "commit_calls": [],
+      "last": 1768478400.0,
+      "badge": "RC",
+      "station": "#105 Payments"
+    },
+    {
+      "pane": "w1:p4",
+      "label": "receipts",
+      "agent": "codex",
+      "status": "done",
+      "title": "Receipts",
+      "focused": false,
+      "current": "feat/receipts",
+      "how": "changed",
+      "since": 1768478400.0,
+      "recent": null,
+      "earlier": [],
+      "evidence": {
+        "feat/receipts": [
+          [
+            1768478400.0,
+            "changed",
+            "Edit src/receipts.rs"
+          ]
+        ]
+      },
+      "commit_calls": [],
+      "last": 1768478400.0,
+      "badge": "PR",
+      "station": "#106 Receipts"
+    }
+  ],
+  "elsewhere": {},
+  "herdr": true,
+  "colors": {
+    "session": {
+      "w1:p1": "#9ece6a",
+      "w1:p2": "#7dcfff",
+      "w1:p3": "#bb9af7",
+      "w1:p4": "#e0af68"
+    },
+    "category": {
+      "Accounts": "#7aa2f7",
+      "Search": "#9d7cd8",
+      "Index": "#73daca",
+      "Cache": "#9ece6a",
+      "Payments": "#c49bd4",
+      "Receipts": "#6fa8a0",
+      "Theme": "#d4a5a5"
+    }
+  }
+}

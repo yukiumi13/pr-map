@@ -1,0 +1,4 @@
+# Paths are absolute or relative to this file. The checkout supplies Git objects/worktrees.
+repo = "example/harbor"
+workspace = "/path/to/workspace"
+checkout = "/path/to/workspace/harbor"
