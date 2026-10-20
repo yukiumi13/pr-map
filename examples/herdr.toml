@@ -13,3 +13,13 @@ zoom = 1
 
 # For a fully offline demonstration, change command to "pr-map --demo --minimap"
 # and click_command to "pr-map --demo --popup". Every station/session is fictional.
+
+# Optional: name agents after their sessions and show their stations in the Agents section.
+# Add the report command to your existing tab_bar_right list rather than replacing it.
+# [ui]
+# tab_bar_right = [
+#   { type = "command", command = "pr-map --report", interval_seconds = 10, timeout_seconds = 8 },
+# ]
+#
+# [ui.sidebar.agents]
+# rows = [["state_icon", "agent", "state_text"], ["workspace", "tab", "pane"], ["$pr"]]

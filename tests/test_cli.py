@@ -69,6 +69,38 @@ class CLITests(unittest.TestCase):
         shown = self.data("--demo", "model", "--frame", "producer-1")
         self.assertIn(first, shown["nodes"])
 
+    def test_report_names_panes_after_their_sessions(self):
+        tools = self.root / "bin"
+        tools.mkdir()
+        for tool in ["git", "cat"]:
+            (tools / tool).symlink_to(shutil.which(tool))
+        (tools / "gh").write_text("#!/bin/sh\nexit 1\n")
+        (tools / "herdr").write_text('#!/bin/sh\ncase "$1 $2" in\n'
+                                     '  "api snapshot") cat "$SNAPSHOT" ;;\n'
+                                     '  "pane report-metadata") shift 2; echo "$*" >> "$LOG" ;;\n'
+                                     '  *) exit 1 ;;\nesac\n')
+        for tool in ["gh", "herdr"]:
+            (tools / tool).chmod(0o755)
+        subprocess.run(["git", "init", "--initial-branch=main", str(self.root / "checkout")],
+                       check=True, capture_output=True)
+        cfg = self.root / "config.toml"
+        cfg.write_text('repo = "example/harbor"\nworkspace = "."\ncheckout = "checkout"\n')
+        agent = {"agent": "claude", "agent_status": "working", "cwd": str(self.root),
+                 "tab_id": "w1:t1", "workspace_id": "w1", "tokens": {}}
+        snapshot = self.root / "snapshot.json"
+        snapshot.write_text(json.dumps({"result": {"snapshot": {
+            "agents": [agent | {"pane_id": "w1:p1", "terminal_title_stripped": "search tuning"},
+                       agent | {"pane_id": "w1:p2", "terminal_title_stripped": "index work",
+                                "label": "set by hand"}],
+            "tabs": [{"tab_id": "w1:t1", "label": "1"}],
+            "workspaces": [{"workspace_id": "w1", "label": "harbor"}]}}}))
+        log = self.root / "report.log"
+        result = self.command("--config", str(cfg), "report", PATH=str(tools),
+                              SNAPSHOT=str(snapshot), LOG=str(log))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The session name becomes the pane title; a label set by hand keeps precedence.
+        self.assertEqual(log.read_text().splitlines(), ["w1:p1 --source pr-map --title search tuning"])
+
     def test_click_rejects_size_mismatch_and_invalid_ids(self):
         self.render("producer-1")
         self.assertIsNone(self.data("--demo", "clicked", "producer-1", "0", "11", "27", "12"))

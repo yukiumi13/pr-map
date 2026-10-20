@@ -2,8 +2,9 @@
 //!
 //! Subcommands:
 //!   minimap [--model FILE]  sidebar panel of the herdr fork, run by herdr every few seconds
-//!   report                  sets each herdr agent's `pr` sidebar token to its station and prints
-//!                           the active pane's, run by a herdr tab bar command
+//!   report                  sets each herdr agent's `pr` sidebar token to its station and its
+//!                           pane title to the session name; prints the active pane's station;
+//!                           run by a herdr tab bar command
 //!   model [--force]         the map model as JSON, for the full map (--force refetches PRs)
 //!   commits BRANCH          a station's own commits as JSON, for the full map's detail view
 //!
@@ -29,20 +30,22 @@ const HERDR_FETCH_TIMEOUT: f64 = 4.0;
 /// Seconds a PR refetch may take for the full map, which loads in the background.
 const MAP_FETCH_TIMEOUT: f64 = 40.0;
 
-/// Sets each agent's `pr` sidebar token to its station and clears stale ones.
+/// Sets each agent's `pr` sidebar token to its station and its pane title to the session name,
+/// and clears stale ones.
 ///
-/// herdr shows the token through `$pr` in [ui.sidebar.agents] rows. Only changed tokens are
-/// reported; the snapshot holds the values herdr currently displays.
+/// herdr shows the token through `$pr` and the title through `pane` in [ui.sidebar.agents]
+/// rows. Only changed values are reported; the snapshot holds the values herdr currently
+/// displays. A pane label set by hand in herdr keeps precedence over the session name.
 ///
 /// Returns:
 ///   The station of the active pane's session, or ''.
 fn report(active_pane: Option<&str>) -> String {
     let snap = sources::herdr_snapshot();
     let model = model::cached(model::MODEL_TTL, HERDR_FETCH_TIMEOUT);
-    let want: HashMap<&str, &str> = model
+    let by_pane: HashMap<&str, &model::Session> = model
         .sessions
         .iter()
-        .map(|s| (s.pane.as_str(), s.station.as_str()))
+        .map(|s| (s.pane.as_str(), s))
         .collect();
     let agents = snap
         .as_ref()
@@ -51,46 +54,47 @@ fn report(active_pane: Option<&str>) -> String {
         .unwrap_or_default();
     for a in &agents {
         let pane = sessions::first_str(a, &["pane_id"]);
-        let have = a
+        let session = by_pane.get(pane);
+        let station = session.map_or("", |s| s.station.as_str());
+        let shown_station = a
             .get("tokens")
             .and_then(|t| t.get("pr"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        let value = want.get(pane).copied().unwrap_or("");
-        if !value.is_empty() && value != have {
-            let token = format!("pr={value}");
-            sys::run(
-                &[
-                    &sys::herdr_bin(),
-                    "pane",
-                    "report-metadata",
-                    pane,
-                    "--source",
-                    "pr-map",
-                    "--token",
-                    &token,
-                ],
-                5.0,
-            );
-        } else if value.is_empty() && !have.is_empty() {
-            sys::run(
-                &[
-                    &sys::herdr_bin(),
-                    "pane",
-                    "report-metadata",
-                    pane,
-                    "--source",
-                    "pr-map",
-                    "--clear-token",
-                    "pr",
-                ],
-                5.0,
-            );
+        let title = session
+            .and_then(|s| s.name.as_deref())
+            .filter(|_| sessions::first_str(a, &["label"]).is_empty())
+            .unwrap_or("");
+        let mut changes = Vec::new();
+        if station != shown_station {
+            changes.extend(match station {
+                "" => ["--clear-token".to_string(), "pr".into()],
+                _ => ["--token".into(), format!("pr={station}")],
+            });
+        }
+        if title != sessions::first_str(a, &["title"]) {
+            changes.extend(match title {
+                "" => vec!["--clear-title".to_string()],
+                _ => vec!["--title".into(), title.into()],
+            });
+        }
+        if !changes.is_empty() {
+            let herdr = sys::herdr_bin();
+            let mut cmd = vec![
+                herdr.as_str(),
+                "pane",
+                "report-metadata",
+                pane,
+                "--source",
+                "pr-map",
+            ];
+            cmd.extend(changes.iter().map(String::as_str));
+            sys::run(&cmd, 5.0);
         }
     }
     active_pane
-        .and_then(|p| want.get(p))
-        .unwrap_or(&"")
+        .and_then(|p| by_pane.get(p))
+        .map_or("", |s| s.station.as_str())
         .to_string()
 }
 
@@ -119,7 +123,7 @@ Commands:
   model [--force | --frame ID]  print the model as JSON
   minimap [--model FILE]        draw an ANSI sidebar panel
   commits BRANCH               print a station's commit list
-  report                       update Herdr agent PR tokens
+  report                       update Herdr agent PR tokens and session-name titles
   clicked ID X Y WIDTH HEIGHT  look up a cell in the accepted panel frame
 
 Configuration: $PRMAP_CONFIG or $XDG_CONFIG_HOME/pr-map/config.toml

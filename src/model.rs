@@ -157,9 +157,12 @@ impl Node {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub pane: String,
-    /// The name its agent gives the session (sessions.rs), else its terminal title; else its
-    /// tab, with ' (codex)' marking a non-Claude agent; else its pane.
+    /// `name`, else its tab with ' (codex)' marking a non-Claude agent, else its pane.
     pub label: String,
+    /// The name its agent gives the session (sessions.rs), else its terminal title; None when
+    /// only its tab names it.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Its tab's label, else '<space>:<tab>'.
     #[serde(default)]
     pub tab: String,
@@ -378,14 +381,16 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
         let agent = a.get("agent").and_then(Value::as_str).map(str::to_string);
         let title = sessions::first_str(&a, &["terminal_title_stripped"]).to_string();
         // The terminal title names a session whose id herdr has not recognised yet.
-        let label = match name.or_else(|| sessions::clean_name(&title)) {
-            Some(name) => name,
+        let name = name.or_else(|| sessions::clean_name(&title));
+        let label = match &name {
+            Some(name) => name.clone(),
             None if tab.is_empty() => pane.clone(),
             None if agent.as_deref() == Some("claude") => tab.clone(),
             None => format!("{tab} ({})", agent.as_deref().unwrap_or("None")),
         };
         sessions.push(Session {
             label,
+            name,
             tab,
             agent,
             status,

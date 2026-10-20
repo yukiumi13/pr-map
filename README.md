@@ -124,6 +124,25 @@ For the offline example, use `pr-map --demo --minimap` and `pr-map --demo --popu
 The wheel changes zoom, dragging pans, and clicking a station opens it in the full map.
 The fork uses manual updates and blocks the official binary updater so the extension is retained.
 
+### Name agents after their sessions
+
+`pr-map --report` sets each mapped agent pane's title to its session name and its `$pr` token
+to its station, and prints the focused pane's station. Run it from the tab bar and show both in
+the Agents section; this part works with official Herdr as well:
+
+```toml
+[ui]
+tab_bar_right = [
+  { type = "command", command = "pr-map --report", interval_seconds = 10, timeout_seconds = 8 },
+]
+
+[ui.sidebar.agents]
+rows = [["state_icon", "agent", "state_text"], ["workspace", "tab", "pane"], ["$pr"]]
+```
+
+An agent then reads, for example, `harbor · 1 · search-dev` above `#102 Search · Dev`, and
+clicking it focuses its pane. A pane label set in Herdr keeps precedence over the session name.
+
 In the full map: arrows or `hjkl` navigate; `Tab`/`Enter` select sessions; `o` folds a stack;
 `a` opens all stacks; `f` follows your session; `/` searches; `r` refetches; `q` exits. A session
 jump focuses its Herdr pane. The offline demo never focuses or changes a real session.
