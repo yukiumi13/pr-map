@@ -157,8 +157,12 @@ impl Node {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub pane: String,
-    /// Its tab's label, else '<space>:<tab>'; ' (codex)' marks a non-Claude agent.
+    /// The name its agent gives the session (sessions.rs), else its terminal title; else its
+    /// tab, with ' (codex)' marking a non-Claude agent; else its pane.
     pub label: String,
+    /// Its tab's label, else '<space>:<tab>'.
+    #[serde(default)]
+    pub tab: String,
     pub agent: Option<String>,
     pub status: String,
     pub title: String,
@@ -344,7 +348,7 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
     );
     for a in list("agents") {
         let cwd = locator.normalize(sessions::first_str(&a, &["foreground_cwd", "cwd"]));
-        let place = sessions::locate(&a, &locator, &pr_by_number);
+        let (place, name) = sessions::locate(&a, &locator, &pr_by_number);
         let status = a
             .get("agent_status")
             .and_then(Value::as_str)
@@ -361,29 +365,31 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
             continue;
         }
         let pane = sessions::first_str(&a, &["pane_id"]).to_string();
-        let mut label = tabs
+        let mut tab = tabs
             .get(sessions::first_str(&a, &["tab_id"]))
             .cloned()
             .unwrap_or_default();
-        if label.is_empty() || label.chars().all(|c| c.is_ascii_digit()) {
+        if tab.is_empty() || tab.chars().all(|c| c.is_ascii_digit()) {
             let space = spaces
                 .get(sessions::first_str(&a, &["workspace_id"]))
                 .map_or("", String::as_str);
-            label = format!("{space}:{label}").trim_matches(':').to_string();
+            tab = format!("{space}:{tab}").trim_matches(':').to_string();
         }
         let agent = a.get("agent").and_then(Value::as_str).map(str::to_string);
-        if agent.as_deref() != Some("claude") {
-            label += &format!(" ({})", agent.as_deref().unwrap_or("None"));
-        }
+        let title = sessions::first_str(&a, &["terminal_title_stripped"]).to_string();
+        // The terminal title names a session whose id herdr has not recognised yet.
+        let label = match name.or_else(|| sessions::clean_name(&title)) {
+            Some(name) => name,
+            None if tab.is_empty() => pane.clone(),
+            None if agent.as_deref() == Some("claude") => tab.clone(),
+            None => format!("{tab} ({})", agent.as_deref().unwrap_or("None")),
+        };
         sessions.push(Session {
-            label: if label.is_empty() {
-                pane.clone()
-            } else {
-                label
-            },
+            label,
+            tab,
             agent,
             status,
-            title: sessions::first_str(&a, &["terminal_title_stripped"]).to_string(),
+            title,
             focused: pane == focused,
             pane,
             place,

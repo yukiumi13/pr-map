@@ -250,7 +250,7 @@ class MetroMap(ScrollView, can_focus=True):
 
         mine = next((s for s in sessions if s["pane"] == self.me), None)
 
-        def chips(b, x, end, y, name_w=9):
+        def chips(b, x, end, y, name_w=12):
             """Sessions on b other than mine as '●name' in their colour while names fit, then
             bare status icons, then a count."""
             here = sorted((s for s in sessions if layout.at(s, nodes) == b and s is not mine),
@@ -564,7 +564,8 @@ class PRMapApp(App):
             icon, c = STATUS.get(s["status"], STATUS["unknown"])
             n = nodes.get(s["current"]) if s["current"] else None
             t.append(f"{i + 1} ", Style(color=MUTED))
-            t.append(f"{icon} {pad(s['label'], 24)} ", Style(color=m.scolor[s["pane"]], bold=True))
+            t.append(f"{icon} {pad(s['label'], 28)} ", Style(color=m.scolor[s["pane"]], bold=True))
+            t.append(f"{pad(s.get('tab', ''), 18)} ", Style(color=MUTED))
             t.append(" YOU " if s is mine else "     ", Style(color=BG, bgcolor=YOU, bold=True)
                      if s is mine else Style(color=MUTED))
             t.append(f" {s['status']:<8}", Style(color=c))
@@ -674,6 +675,7 @@ class PRMapApp(App):
                 icon, c = STATUS.get(s["status"], STATUS["unknown"])
                 t = Text()
                 t.append(f"{icon} {s['label']} ", Style(color=MUTED if faint else scolor[s["pane"]], bold=True))
+                t.append(f"{s.get('tab', '')} ", Style(color=MUTED))
                 if s is mine:
                     t.append(" YOU ", Style(color=BG, bgcolor=YOU, bold=True))
                 t.append(f" {s['status']}", Style(color=c))

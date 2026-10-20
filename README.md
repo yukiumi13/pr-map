@@ -86,6 +86,10 @@ recent tool-call records of the associated Claude/Codex sessions. A session is p
 change record that is not marked failed, then its latest read, then its working directory. Placement is an inference,
 and the detail panel exposes its evidence. Commands and transcript content are not uploaded.
 
+A session carries the name its agent gives it: a Claude `/rename` title, else the title Claude gave
+the conversation, else the Codex thread name (`~/.codex/session_index.jsonl`). Without one, its
+terminal title, then its Herdr tab, names it. The full map shows the tab beside each name.
+
 Optional PR title tags supply category colours and stages, for example
 `[App: Search] [Developing] Improve document search`. Untagged PRs work too, using their branch
 names. Drafts, closed PRs and branches without a PR have distinct line styles.

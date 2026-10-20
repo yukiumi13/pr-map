@@ -10,6 +10,10 @@
 //! A session works on the branch of its latest change; failing that, its latest read; failing
 //! that, its working directory. A later read elsewhere is "recently visited"; other branches it
 //! hit are "earlier".
+//!
+//! The agent also names the session: Claude by its /rename title, else the title it gave the
+//! conversation, both re-appended to the transcript as it runs; Codex by its thread name in
+//! ~/.codex/session_index.jsonl.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -145,6 +149,54 @@ fn id_key(v: Option<&Value>) -> Option<String> {
 fn truncate(text: &str) -> String {
     text.chars().take(4000).collect()
 }
+
+/// A name as one line without control characters, or None when nothing is left.
+pub fn clean_name(name: &str) -> Option<String> {
+    let name = name
+        .split(char::is_control)
+        .flat_map(str::split_whitespace)
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!name.is_empty()).then_some(name)
+}
+
+/// The latest /rename title in a Claude transcript, else the latest title Claude gave it.
+fn claude_name(lines: &[&str]) -> Option<String> {
+    let mut ai_title = None;
+    for line in lines.iter().rev() {
+        if !line.contains("-title\"") {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let name = |key: &str| record.get(key).and_then(Value::as_str).and_then(clean_name);
+        match record.get("type").and_then(Value::as_str) {
+            Some("custom-title") => {
+                if let Some(name) = name("customTitle") {
+                    return Some(name);
+                }
+            }
+            Some("ai-title") if ai_title.is_none() => ai_title = name("aiTitle"),
+            _ => {}
+        }
+    }
+    ai_title
+}
+
+/// Codex thread names by session id: the last entry for each id in session_index.jsonl.
+static CODEX_NAMES: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+    let index = sys::home().join(".codex/session_index.jsonl");
+    std::fs::read_to_string(index)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|entry| {
+            let id = entry.get("id")?.as_str()?.to_string();
+            Some((id, clean_name(entry.get("thread_name")?.as_str()?)?))
+        })
+        .collect()
+});
 
 fn claude_calls(lines: &[&str]) -> Vec<Call> {
     let (mut calls, mut by_id) = (Vec::<Call>::new(), HashMap::new());
@@ -346,29 +398,30 @@ fn transcript_path(kind: &str, sid: &str) -> Option<PathBuf> {
     best.map(|(_, p)| p)
 }
 
-/// The last WINDOW tool calls of a transcript, oldest first.
-fn tool_calls(kind: &str, path: &Path) -> Vec<Call> {
+/// The last WINDOW tool calls of a transcript, oldest first, and the name its tail gives the
+/// session (Claude only).
+fn read_tail(kind: &str, path: &Path) -> (Vec<Call>, Option<String>) {
     let mut buf = Vec::new();
     let Ok(mut f) = std::fs::File::open(path) else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
     let size = f.metadata().map(|m| m.len()).unwrap_or(0);
     if f.seek(SeekFrom::Start(size.saturating_sub(TAIL_BYTES)))
         .is_err()
         || f.read_to_end(&mut buf).is_err()
     {
-        return Vec::new();
+        return (Vec::new(), None);
     }
     let text = String::from_utf8_lossy(&buf);
     // The first line of a tail starts mid-record.
     let lines: Vec<&str> = text.lines().skip(usize::from(size > TAIL_BYTES)).collect();
-    let mut calls = if kind == "claude" {
-        claude_calls(&lines)
+    let (mut calls, name) = if kind == "claude" {
+        (claude_calls(&lines), claude_name(&lines))
     } else {
-        codex_calls(&lines)
+        (codex_calls(&lines), None)
     };
     calls.drain(..calls.len().saturating_sub(WINDOW));
-    calls
+    (calls, name)
 }
 
 /// Escapes text for a regex, leaving characters outside the syntax alone.
@@ -556,8 +609,13 @@ pub fn first_str<'a>(v: &'a Value, keys: &[&str]) -> &'a str {
         .unwrap_or("")
 }
 
-/// Places one herdr agent on branches; see the module docs.
-pub fn locate(agent: &Value, locator: &Locator, pr_by_number: &HashMap<u64, Pr>) -> Place {
+/// Places one herdr agent on branches and finds the name its agent gives the session; see the
+/// module docs.
+pub fn locate(
+    agent: &Value,
+    locator: &Locator,
+    pr_by_number: &HashMap<u64, Pr>,
+) -> (Place, Option<String>) {
     let sid = agent
         .get("agent_session")
         .and_then(|s| s.get("value"))
@@ -570,11 +628,15 @@ pub fn locate(agent: &Value, locator: &Locator, pr_by_number: &HashMap<u64, Pr>)
     let mut events: Vec<(f64, String, u8)> = Vec::new();
     let mut evidence: IndexMap<String, Vec<(f64, String, String)>> = IndexMap::new();
     let mut commit_calls = Vec::new();
-    for call in transcript
+    let (calls, transcript_name) = transcript
         .as_deref()
-        .map(|p| tool_calls(kind, p))
-        .unwrap_or_default()
-    {
+        .map(|p| read_tail(kind, p))
+        .unwrap_or_default();
+    let name = match kind {
+        "codex" => sid.and_then(|sid| CODEX_NAMES.get(sid)).cloned(),
+        _ => transcript_name,
+    };
+    for call in calls {
         let mut grades: IndexMap<String, u8> = IndexMap::new();
         for (key, grade) in locator.hits(&call.text, call.act) {
             let key = match key.strip_prefix('#') {
@@ -635,7 +697,7 @@ pub fn locate(agent: &Value, locator: &Locator, pr_by_number: &HashMap<u64, Pr>)
     for ev in evidence.values_mut() {
         ev.drain(..ev.len().saturating_sub(4));
     }
-    Place {
+    let place = Place {
         current,
         how,
         since,
@@ -644,7 +706,8 @@ pub fn locate(agent: &Value, locator: &Locator, pr_by_number: &HashMap<u64, Pr>)
         evidence,
         commit_calls,
         last: transcript.as_deref().and_then(sys::mtime),
-    }
+    };
+    (place, name)
 }
 
 /// Two-letter badge for a session label: 'search-data' -> 'SE', 'index-for-receipts' -> 'IR'.
@@ -658,5 +721,31 @@ pub fn initials(label: &str) -> String {
         [] => "??".into(),
         [one] => one.chars().take(2).collect::<String>().to_uppercase(),
         [a, b, ..] => format!("{}{}", &a[..1], &b[..1]).to_uppercase(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rename_names_a_claude_session_before_its_own_title() {
+        let record = |kind: &str, key: &str, name: &str| {
+            serde_json::json!({"type": kind, key: name}).to_string()
+        };
+        let titled = |name: &str| record("ai-title", "aiTitle", name);
+        let renamed = |name: &str| record("custom-title", "customTitle", name);
+        let name =
+            |lines: &[String]| claude_name(&lines.iter().map(String::as_str).collect::<Vec<_>>());
+        let topic = name(&[titled("Old topic"), titled("Search tuning")]);
+        assert_eq!(topic.as_deref(), Some("Search tuning"));
+        let both = name(&[renamed("search-dev"), titled("Search tuning")]);
+        assert_eq!(both.as_deref(), Some("search-dev"));
+        let twice = name(&[renamed("old"), renamed("search-dev")]);
+        assert_eq!(twice.as_deref(), Some("search-dev"));
+        // Control characters never reach the terminal; a blank rename names nothing.
+        let unsafe_name = name(&[titled("a\x1b[2Jb\nc"), renamed(" \t")]);
+        assert_eq!(unsafe_name.as_deref(), Some("a [2Jb c"));
+        assert_eq!(name(&[]), None);
     }
 }
