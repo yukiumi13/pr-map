@@ -15,6 +15,11 @@ cat > "$prefix/bin/pr-map" <<'EOF'
 case "$0" in */*) bindir=${0%/*} ;; *) bindir=. ;; esac
 prefix=$(CDPATH= cd -- "$bindir/.." && pwd)
 export PRMAP_BIN="$prefix/bin/prmap"
+# Herdr runs the panel and the report every few seconds; they skip Python's startup.
+case "$*" in
+  --minimap) exec "$PRMAP_BIN" minimap ;;
+  --report) exec "$PRMAP_BIN" report ;;
+esac
 exec "$prefix/share/pr-map/venv/bin/pr-map" "$@"
 EOF
 chmod 755 "$prefix/bin/pr-map"
