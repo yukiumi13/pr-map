@@ -7,6 +7,8 @@ from datetime import datetime
 
 BIN = os.environ.get("PRMAP_BIN") or shutil.which("prmap") or "prmap"
 DEMO = False
+# A clicked cell's target names a station, or a session's pane after this prefix.
+PANE = ":pane:"
 
 
 def _backend(*args):
@@ -32,11 +34,13 @@ def commits(branch):
     return _backend("commits", branch) or []
 
 
-def clicked_station(column, line, width, height):
+def clicked():
+    """The target of the panel cell a click opened us on: a station, PANE + pane id, or None."""
     frame_id = os.environ.get("HERDR_PANEL_FRAME_ID")
-    if not frame_id:
+    cell = [os.environ.get(f"HERDR_PANEL_{k}") for k in ("COLUMN", "LINE", "WIDTH", "HEIGHT")]
+    if not frame_id or not all(cell):
         return None
-    return _backend("clicked", frame_id, *map(str, (column, line, width, height)))
+    return _backend("clicked", frame_id, *cell)
 
 
 def focus_pane(pane_id):

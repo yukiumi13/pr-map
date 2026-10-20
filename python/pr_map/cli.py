@@ -21,8 +21,12 @@ def main():
     if args.minimap or args.report or args.json:
         command = [prmap.BIN, *(["--demo"] if args.demo else []), "minimap" if args.minimap else "report" if args.report else "model"]
         os.execvpe(command[0], command, os.environ)
+    target = prmap.clicked() if args.popup else None
+    # A click on a session's name goes straight to its pane, before the map would start.
+    if target and target.startswith(prmap.PANE) and prmap.focus_pane(target[len(prmap.PANE):]):
+        return
     from .app import PRMapApp
-    PRMapApp(popup=args.popup).run()
+    PRMapApp(popup=args.popup, clicked=target).run()
 
 
 if __name__ == "__main__":

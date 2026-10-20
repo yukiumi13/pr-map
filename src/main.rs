@@ -124,7 +124,8 @@ Commands:
   minimap [--model FILE]        draw an ANSI sidebar panel
   commits BRANCH               print a station's commit list
   report                       update Herdr agent PR tokens and session-name titles
-  clicked ID X Y WIDTH HEIGHT  look up a cell in the accepted panel frame
+  clicked ID X Y WIDTH HEIGHT  look up a cell in the accepted panel frame (a station, or
+                               ':pane:' and a session's pane)
 
 Configuration: $PRMAP_CONFIG or $XDG_CONFIG_HOME/pr-map/config.toml
 TOML keys: repo = 'owner/repository', workspace = '/path', checkout = '/path', or several

@@ -4,9 +4,9 @@
 //! COLUMNS and LINES set to the panel body and HERDR_ACTIVE_PANE_ID set to the focused pane, and
 //! shows the output between Spaces and Agents. The mouse wheel over the panel steps
 //! HERDR_PANEL_ZOOM through ZOOMS, and dragging it pans the view by HERDR_PANEL_DRAG_X and
-//! HERDR_PANEL_DRAG_Y cells. Each run leaves the cells it drew a station in at
-//! an immutable frame record, where the full map opened by a click on the panel looks up
-//! the clicked station.
+//! HERDR_PANEL_DRAG_Y cells. Each run leaves the cells it drew a station or a session in at
+//! an immutable frame record, where a click on the panel looks up the station the full map
+//! opens on, or the session (layout::PANE) whose pane it focuses.
 //!
 //! The layout is the full map's (layout.rs) at a smaller scale, picked from ZOOMS: the
 //! repository ◈ on top, a bus down the left edge to the base branches and each stack running
@@ -500,7 +500,8 @@ pub fn render(
         let others = others_at(b);
         if let (3, Some(first)) = (labels, others.first()) {
             let name = fit(&first.label, w - more(&others).len() as i64);
-            c.put(x, y + 3, &name, scol(first), true, t, MAP_BG);
+            let pane = format!("{}{}", layout::PANE, first.pane);
+            c.put(x, y + 3, &name, scol(first), true, Some(&pane), MAP_BG);
             c.put(
                 x + cells(&name),
                 y + 3,
@@ -528,7 +529,7 @@ pub fn render(
             "●",
             scol(s),
             true,
-            Some(ROOT),
+            Some(&format!("{}{}", layout::PANE, s.pane)),
             MAP_BG,
         );
     }

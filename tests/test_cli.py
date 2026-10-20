@@ -69,6 +69,13 @@ class CLITests(unittest.TestCase):
         shown = self.data("--demo", "model", "--frame", "producer-1")
         self.assertIn(first, shown["nodes"])
 
+    def test_a_session_name_targets_its_pane(self):
+        _, frame = self.render("producer-z", HERDR_PANEL_ZOOM="2")
+        sessions = {s["pane"] for s in self.data("--demo", "model")["sessions"]}
+        x, y, target = next(cell for cell in frame["hit"] if cell[2].startswith(":pane:"))
+        self.assertIn(target.removeprefix(":pane:"), sessions)
+        self.assertEqual(self.data("--demo", "clicked", "producer-z", str(x), str(y), "26", "12"), target)
+
     def test_report_names_panes_after_their_sessions(self):
         tools = self.root / "bin"
         tools.mkdir()

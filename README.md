@@ -122,6 +122,8 @@ zoom = 1
 
 For the offline example, use `pr-map --demo --minimap` and `pr-map --demo --popup` instead.
 The wheel changes zoom, dragging pans, and clicking a station opens it in the full map.
+Zoomed in fully, clicking a session's name, or one of the dots beside the repository name,
+focuses that session's pane instead.
 The fork uses manual updates and blocks the official binary updater so the extension is retained.
 
 ### Name agents after their sessions
@@ -194,6 +196,9 @@ tests, 10 command-runner tests and 20 configuration/UI architecture checks.
 The checks exercise offline operation, configuration outside the checkout, Unicode/narrow
 panels, immutable click selection, UI navigation and resize. They use fictional fixtures and
 return a failing status for regressions. GitHub CI runs these checks on Linux.
+
+A click on a session's name is resolved by the click command, so its popup shows for a moment
+before the pane is focused.
 
 This alpha has not been qualified for macOS, Windows or long-running multi-client workloads.
 A rebuild reads up to 4 MB from each active session transcript; very large/NFS workspaces can

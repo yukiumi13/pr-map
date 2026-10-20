@@ -14,6 +14,9 @@ use crate::model::{Kind, Model, Node, Session};
 
 /// The repository's station; ':' never occurs in a branch name.
 pub const ROOT: &str = ":repo";
+/// Prefix of a panel cell's target that names a session's pane instead of a station, as in
+/// ':pane:w1:p2'; a click there focuses that pane.
+pub const PANE: &str = ":pane:";
 
 pub fn repo_name(repo: &str) -> &str {
     repo.rsplit('/').next().unwrap_or(repo)

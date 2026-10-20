@@ -5,7 +5,8 @@ Usage:
   pr-map --popup    as above; jumping to a session also closes the map (herdr popup binding).
                     Opened by a click on the herdr fork's sidebar minimap, it starts on the
                     clicked station (HERDR_PANEL_COLUMN, HERDR_PANEL_LINE, HERDR_PANEL_WIDTH,
-                    HERDR_PANEL_HEIGHT).
+                    HERDR_PANEL_HEIGHT); a click on a session's name focuses its pane instead
+                    and opens no map (cli.py), or shows that session when it cannot.
   pr-map --json     print the model and exit
 
 The model comes from the Rust backend (`prmap`, see prmap.py).
@@ -464,17 +465,16 @@ class PRMapApp(App):
                 Binding("slash", "search", show=False)] + \
                [Binding(str(i), f"session({i})", show=False) for i in range(1, 10)]
 
-    def __init__(self, popup=False):
+    def __init__(self, popup=False, clicked=None):
         super().__init__()
         self.popup = popup
+        # The clicked panel cell's target (prmap.clicked); the first model opens on it.
+        self.clicked = clicked
         self.model = None
         self.follow = False
         self.session_rows = []
         self.shown = None
         self.me = os.environ.get("HERDR_ACTIVE_PANE_ID") or os.environ.get("HERDR_PANE_ID") or ("w1:p1" if prmap.DEMO else None)
-        panel = [os.environ.get(k) for k in ("HERDR_PANEL_COLUMN", "HERDR_PANEL_LINE",
-                                             "HERDR_PANEL_WIDTH", "HERDR_PANEL_HEIGHT")]
-        self.clicked = tuple(int(v) for v in panel) if all(panel) else None
 
     def compose(self) -> ComposeResult:
         yield Static("PR map · loading…", id="title")
@@ -518,18 +518,23 @@ class PRMapApp(App):
         m = self.query_one(MetroMap)
         mine = self.mine()
         m.me = mine["pane"] if mine else None
-        target = m.selected
+        target, pane = m.selected, None
         if (first or self.follow) and mine:
             target = layout.at(mine, model["nodes"])
         if first and self.clicked:
-            # The cells the panel drew, so the click names the station it showed.
-            target = prmap.clicked_station(*self.clicked) or target
+            # The cells the panel drew, so the click names the station or session it showed.
+            session = next((s for s in model["sessions"]
+                            if prmap.PANE + s["pane"] == self.clicked), None)
+            if session:
+                target, pane = layout.at(session, model["nodes"]), session["pane"]
+            elif not self.clicked.startswith(prmap.PANE):
+                target = self.clicked
         m.set_model(model, target)
         if first or self.follow:
             m.select(m.selected)
         self._title()
         self._legend()
-        self.show(m.selected)
+        self.show(m.selected, pane)
 
     def _title(self):
         if not self.model:
