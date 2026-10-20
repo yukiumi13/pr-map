@@ -113,7 +113,7 @@ pub struct Node {
     pub synced: Option<bool>,
     /// An open PR's own commits.
     pub commits: Option<u64>,
-    /// A local branch's head, and the head of the PR it hangs under.
+    /// A local branch's head, and the head of the PR or main it hangs under.
     pub head: Option<String>,
     pub base_oid: Option<String>,
     /// 'closed', the stage's abbreviation, or '' (no PR or no stage).
@@ -437,16 +437,19 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
                     deepest = Some((p, depth));
                 }
             }
-            let parent = match deepest {
-                Some((p, _)) => Some(p.head_ref_name.as_str()),
-                None => heads
+            let (parent, base_oid) = match deepest {
+                Some((p, _)) => (Some(p.head_ref_name.as_str()), Some(p.head_ref_oid.clone())),
+                None => match heads
                     .get("main")
                     .filter(|m| git.is_ancestor(m, head) == Some(true))
-                    .map(|_| "main"),
+                {
+                    Some(main) => (Some("main"), Some(main.clone())),
+                    None => (None, None),
+                },
             };
             let mut node = Node::new(b, Kind::Local, None, parent);
             node.head = Some(head.clone());
-            node.base_oid = deepest.map(|(p, _)| p.head_ref_oid.clone());
+            node.base_oid = base_oid;
             nodes.insert(b.clone(), node);
         }
     }
