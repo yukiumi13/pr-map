@@ -52,7 +52,7 @@ class CLITests(unittest.TestCase):
 
     def test_help_and_version_need_no_configuration(self):
         self.assertEqual(self.command("--help").returncode, 0)
-        self.assertIn("0.1.0-alpha.3", self.command("--version").stdout)
+        self.assertIn("0.1.0-alpha.4", self.command("--version").stdout)
         self.assertFalse((self.root / "cache").exists())
 
     def test_frames_survive_other_views(self):

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "herdr-pr-map"
-version = "0.1.0a3"
+version = "0.1.0a4"
 description = "A PR stack map with live coding-agent positions"
 requires-python = ">=3.11"
 dependencies = ["textual==6.12.0", "rich==15.0.0"]
