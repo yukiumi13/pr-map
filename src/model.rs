@@ -293,7 +293,7 @@ fn hints(node: &Node, nodes: &IndexMap<String, Node>) -> Vec<String> {
 
 /// Builds the map model from PRs, herdr's snapshot and the git store.
 pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Git) -> Model {
-    let trees = sources::worktrees();
+    let trees = sources::worktrees(&config::get().checkout);
     let heads = sources::local_heads();
     let cutoff = sys::now() - CLOSED_DAYS * 86400.0;
     let prs: Vec<Pr> = prs

@@ -1,6 +1,8 @@
 //! External sources: PRs from `gh` (cached), the shared git object store of the experiment
 //! worktrees (memoized), and herdr's snapshot.
 
+use std::sync::OnceLock;
+
 use indexmap::IndexMap;
 use serde_json::Value;
 
@@ -147,17 +149,10 @@ impl Git {
     }
 }
 
-/// [(path, branch)] for every worktree on a branch, longest path first.
-pub fn worktrees() -> Vec<(String, String)> {
+/// [(path, branch)] for every worktree of `checkout` on a branch, longest path first.
+pub fn worktrees(checkout: &str) -> Vec<(String, String)> {
     let out = sys::run(
-        &[
-            "git",
-            "-C",
-            &config::get().checkout,
-            "worktree",
-            "list",
-            "--porcelain",
-        ],
+        &["git", "-C", checkout, "worktree", "list", "--porcelain"],
         10.0,
     )
     .map(|o| o.stdout)
@@ -192,9 +187,16 @@ pub fn local_heads() -> IndexMap<String, String> {
 }
 
 /// herdr's snapshot of the session it runs in: workspaces, tabs, panes and agents.
+///
+/// Taken once per process, so choosing the project and building the model see the same agents.
 pub fn herdr_snapshot() -> Option<Value> {
-    let out = sys::stdout_of(&[&sys::herdr_bin(), "api", "snapshot"], 5.0)?;
-    let mut v: Value = serde_json::from_str(&out).ok()?;
-    let snap = v.get_mut("result")?.get_mut("snapshot")?.take();
-    snap.is_object().then_some(snap)
+    static SNAPSHOT: OnceLock<Option<Value>> = OnceLock::new();
+    SNAPSHOT
+        .get_or_init(|| {
+            let out = sys::stdout_of(&[&sys::herdr_bin(), "api", "snapshot"], 5.0)?;
+            let mut v: Value = serde_json::from_str(&out).ok()?;
+            let snap = v.get_mut("result")?.get_mut("snapshot")?.take();
+            snap.is_object().then_some(snap)
+        })
+        .clone()
 }

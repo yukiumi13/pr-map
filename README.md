@@ -58,6 +58,23 @@ Use `pr-map --config /path/to/config.toml`, or export `PRMAP_CONFIG` before laun
 a config file, the current Git checkout and its GitHub `origin` are inferred. To combine several
 worktrees under one map, use an explicit config so each provider invocation selects the same root.
 
+To follow several repositories, list each as a `[[project]]` table with the same keys instead:
+
+```toml
+[[project]]
+repo = "example/harbor"
+workspace = "/path/to/harbor-workspace"
+checkout = "/path/to/harbor-workspace/harbor"
+
+[[project]]
+repo = "example/lighthouse"
+checkout = "/path/to/lighthouse"
+```
+
+Each Herdr session then maps the project most of its agents work in: below its `workspace`, an
+alias or one of the checkout's worktrees. A tie, or a session without such agents, gets the first
+project listed. A session's other agents are counted as working elsewhere.
+
 ```sh
 pr-map                     # full map; Herdr itself is optional
 pr-map --json              # inspect the live model

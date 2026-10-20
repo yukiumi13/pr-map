@@ -1,4 +1,8 @@
 //! Process configuration and cache identity, loaded once at the command boundary.
+//!
+//! The config file names one project with top-level keys, or several as `[[project]]` tables
+//! with the same keys. With several, each Herdr session maps the one most of its agents work in.
+use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -16,15 +20,25 @@ pub struct Config {
     pub demo: bool,
 }
 
+/// One project as the config file gives it; absent parts are inferred from the checkout.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FileConfig {
+struct FileProject {
     repo: Option<String>,
     workspace: Option<PathBuf>,
     checkout: Option<PathBuf>,
     #[serde(default)]
     aliases: Vec<String>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileProjects {
+    project: Vec<FileProject>,
+}
+
+/// A resolved project: (repo, workspace, checkout, aliases).
+type Project = (String, String, String, Vec<String>);
 
 pub fn get() -> &'static Config {
     CONFIG.get().expect("configuration initialized by main")
@@ -57,6 +71,60 @@ fn valid_repo(repo: &str) -> bool {
                 && s.bytes()
                     .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
         })
+}
+
+/// Fills a project's absent parts and makes its paths absolute against `base`.
+fn resolve(file: FileProject, base: &Path) -> Result<Project, String> {
+    let checkout = match file.checkout {
+        Some(p) => absolute(&p, base)?,
+        None => git(&["rev-parse", "--show-toplevel"])?,
+    };
+    let workspace = match file.workspace {
+        Some(p) => absolute(&p, base)?,
+        None => checkout.clone(),
+    };
+    let repo = match file.repo {
+        Some(repo) => repo,
+        None => repo_from_remote(&git(&["-C", &checkout, "remote", "get-url", "origin"])?)
+            .ok_or("origin is not a GitHub remote; set repo = 'owner/repository' in config")?,
+    };
+    if !valid_repo(&repo) {
+        return Err("repo must have the form owner/repository".into());
+    }
+    Ok((repo, workspace, checkout, file.aliases))
+}
+
+/// The project most of the snapshot's agents work in, below its workspace, an alias or one of
+/// its worktrees; the first one listed on a tie, without matching agents or without a snapshot.
+fn select(mut projects: Vec<Project>, snap: Option<&serde_json::Value>) -> Project {
+    let cwds: Vec<String> = snap
+        .and_then(|s| s["agents"].as_array())
+        .into_iter()
+        .flatten()
+        .map(|a| crate::sessions::first_str(a, &["foreground_cwd", "cwd"]))
+        .map(|c| format!("{}/", c.trim_end_matches('/')))
+        .collect();
+    let agents_in = |(_, workspace, checkout, aliases): &Project| {
+        let roots: Vec<String> = std::iter::once(workspace)
+            .chain(aliases)
+            .cloned()
+            .chain(
+                crate::sources::worktrees(checkout)
+                    .into_iter()
+                    .map(|(p, _)| p),
+            )
+            .map(|r| format!("{}/", r.trim_end_matches('/')))
+            .collect();
+        cwds.iter()
+            .filter(|c| roots.iter().any(|r| c.starts_with(r.as_str())))
+            .count()
+    };
+    let best = projects
+        .iter()
+        .enumerate()
+        .max_by_key(|(i, p)| (agents_in(p), Reverse(*i)))
+        .map_or(0, |(i, _)| i);
+    projects.swap_remove(best)
 }
 
 fn absolute(path: &Path, base: &Path) -> Result<String, String> {
@@ -98,33 +166,37 @@ impl Config {
                 }
                 Err(e) => return Err(format!("{}: {e}", file.display())),
             };
-            let cfg: FileConfig =
-                toml::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+            let invalid = |e: toml::de::Error| format!("{}: {e}", file.display());
+            let table: toml::Table = toml::from_str(&text).map_err(invalid)?;
+            // [[project]] tables exclude top-level project keys: FileProjects denies them.
+            let files = if table.contains_key("project") {
+                toml::Value::Table(table)
+                    .try_into::<FileProjects>()
+                    .map_err(invalid)?
+                    .project
+            } else {
+                vec![toml::Value::Table(table)
+                    .try_into::<FileProject>()
+                    .map_err(invalid)?]
+            };
+            if files.is_empty() {
+                return Err(format!("{}: no [[project]] listed", file.display()));
+            }
             let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
             let base = if text.is_empty() {
                 cwd.as_path()
             } else {
                 file.parent().unwrap_or(&cwd)
             };
-            let checkout = match cfg.checkout {
-                Some(p) => absolute(&p, base)?,
-                None => git(&["rev-parse", "--show-toplevel"])?,
-            };
-            let workspace = match cfg.workspace {
-                Some(p) => absolute(&p, base)?,
-                None => checkout.clone(),
-            };
-            let repo = match cfg.repo {
-                Some(repo) => repo,
-                None => repo_from_remote(&git(&["-C", &checkout, "remote", "get-url", "origin"])?)
-                    .ok_or(
-                        "origin is not a GitHub remote; set repo = 'owner/repository' in config",
-                    )?,
-            };
-            if !valid_repo(&repo) {
-                return Err("repo must have the form owner/repository".into());
+            let mut projects = files
+                .into_iter()
+                .map(|f| resolve(f, base))
+                .collect::<Result<Vec<_>, _>>()?;
+            if projects.len() == 1 {
+                projects.remove(0)
+            } else {
+                select(projects, crate::sources::herdr_snapshot().as_ref())
             }
-            (repo, workspace, checkout, cfg.aliases)
         };
         // Stable across processes, separated by repository, checkout and Herdr session.
         let session = ["HERDR_SOCKET_PATH", "HERDR_SESSION_NAME"]
@@ -169,5 +241,57 @@ mod tests {
         assert!(!valid_repo("owner/repo/extra"));
         assert!(!valid_repo("../repo"));
         assert!(repo_from_remote("https://other.invalid/owner/repo").is_none());
+    }
+
+    fn project(repo: &str, workspace: &str, aliases: &[&str]) -> Project {
+        let aliases = aliases.iter().map(|a| a.to_string()).collect();
+        (
+            repo.into(),
+            workspace.into(),
+            "/nonexistent".into(),
+            aliases,
+        )
+    }
+
+    fn pick(cwds: Option<&[&str]>) -> String {
+        let projects = vec![
+            project("o/a", "/w/a", &[]),
+            project("o/b", "/w/b", &["/old/b"]),
+        ];
+        let agents: Option<Vec<serde_json::Value>> =
+            cwds.map(|c| c.iter().map(|d| serde_json::json!({"cwd": d})).collect());
+        let snap = agents.map(|a| serde_json::json!({ "agents": a }));
+        select(projects, snap.as_ref()).0
+    }
+
+    #[test]
+    fn a_session_maps_the_project_most_of_its_agents_work_in() {
+        // '/w/bb' is not below '/w/b'; an alias counts for its project.
+        assert_eq!(pick(Some(&["/w/a", "/w/a/x", "/w/bb", "/old/b/y"])), "o/a");
+        assert_eq!(pick(Some(&["/w/a", "/w/b/x", "/old/b/y"])), "o/b");
+        // A tie, no matching agent or no snapshot keeps the first project listed.
+        assert_eq!(pick(Some(&["/w/a", "/w/b"])), "o/a");
+        assert_eq!(pick(Some(&["/elsewhere"])), "o/a");
+        assert_eq!(pick(None), "o/a");
+    }
+
+    #[test]
+    fn project_tables_and_top_level_keys_do_not_mix() {
+        let dir = std::env::temp_dir().join(format!("prmap-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("config.toml");
+        let load = |text: &str| {
+            std::fs::write(&file, text).unwrap();
+            Config::load(file.to_str(), false, false)
+        };
+        let one = "[[project]]\nrepo = 'o/a'\ncheckout = '.'\n";
+        let config = load(one).unwrap();
+        assert_eq!(
+            (config.repo.as_str(), config.workspace.as_str()),
+            ("o/a", config.checkout.as_str())
+        );
+        assert!(load(&format!("repo = 'o/b'\n{one}")).is_err());
+        assert!(load("project = []\n").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

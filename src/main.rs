@@ -123,7 +123,8 @@ Commands:
   clicked ID X Y WIDTH HEIGHT  look up a cell in the accepted panel frame
 
 Configuration: $PRMAP_CONFIG or $XDG_CONFIG_HOME/pr-map/config.toml
-TOML keys: repo = 'owner/repository', workspace = '/path', checkout = '/path'
+TOML keys: repo = 'owner/repository', workspace = '/path', checkout = '/path', or several
+[[project]] tables with these keys; each Herdr session maps the one most of its agents work in.
 Without a config file, checkout and GitHub origin are inferred from the current directory.
 --demo uses bundled fictional data and never reads Git, GitHub or agent transcripts.
 The full-screen interface is pr-map (Python/Textual).";
