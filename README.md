@@ -71,9 +71,18 @@ repo = "example/lighthouse"
 checkout = "/path/to/lighthouse"
 ```
 
-Each Herdr session then maps the project most of its agents work in: below its `workspace`, an
-alias or one of the checkout's worktrees. A tie, or a session without such agents, gets the first
-project listed. A session's other agents are counted as working elsewhere.
+Each agent works for the project with the deepest directory around its working directory: one of
+the checkout's worktrees, else its `workspace` or an alias. When one project's `workspace` is
+another's checkout, as with a repository of shared tools that agents use to drive the first
+project, an agent there works for the checkout's repository unless its recent tool calls place it
+on one of the first project's branches. An agent outside every project works for the first project
+whose branches its tool calls name, else is counted as working elsewhere.
+
+Each Herdr session maps the project most of its agents work in; a tie, or a session without such
+agents, gets the first project listed. Below the map, the sidebar panel gives each other project
+with agents in the session a row with its agent count and open PRs; clicking that row opens its
+map, and `p` in the full map switches to the next one. `PRMAP_PROJECT=owner/repository` selects a
+configured project explicitly.
 
 ```sh
 pr-map                     # full map; Herdr itself is optional
@@ -123,13 +132,16 @@ zoom = 1
 For the offline example, use `pr-map --demo --minimap` and `pr-map --demo --popup` instead.
 The wheel changes zoom, dragging pans, and clicking a station opens it in the full map.
 Zoomed in fully, clicking a session's name, or one of the dots beside the repository name,
-focuses that session's pane instead.
+focuses that session's pane instead. With several projects configured, a row under the map
+names each other project with agents in this session, for example `◈ lighthouse ●● 1 PR`;
+clicking it opens that project's map.
 The fork uses manual updates and blocks the official binary updater so the extension is retained.
 
 ### Name agents after their sessions
 
 `pr-map --report` sets each mapped agent pane's title to its session name and its `$pr` token
-to its station, and prints the focused pane's station. Run it from the tab bar and show both in
+to its station, or `◈ <repository>` for an agent of another configured project, and prints the
+focused pane's token. Run it from the tab bar and show both in
 the Agents section; this part works with official Herdr as well:
 
 ```toml
@@ -146,7 +158,8 @@ An agent then reads, for example, `harbor · 1 · search-dev` above `#102 Search
 clicking it focuses its pane. A pane label set in Herdr keeps precedence over the session name.
 
 In the full map: arrows or `hjkl` navigate; `Tab`/`Enter` select sessions; `o` folds a stack;
-`a` opens all stacks; `f` follows your session; `/` searches; `r` refetches; `q` exits. A session
+`a` opens all stacks; `f` follows your session; `/` searches; `p` maps the next project with
+agents here; `r` refetches; `q` exits. A session
 jump focuses its Herdr pane. The offline demo never focuses or changes a real session.
 
 ## How it works
@@ -165,6 +178,7 @@ last 64 frames per panel producer; an expired frame opens the current map with a
 
 Caches live below `$XDG_CACHE_HOME/pr-map/` (default `~/.cache/pr-map`), separated by repository,
 checkout and Herdr session. Models are reused for four seconds; PR metadata for five minutes.
+A rebuild also refreshes the PR lists of other projects an agent works in, alongside its own.
 Failed PR fetches retain the previous PR list. A missing Herdr snapshot gives a PR-only map.
 
 | Source | Responsibility |
@@ -188,13 +202,13 @@ python3 -m pip install -c requirements.lock .
 PRMAP_TEST_BIN="$PWD/target/debug/prmap" python3 -m unittest discover -s tests -v
 ```
 
-The alpha candidate passed strict Rust formatting/clippy, six backend unit tests and twelve
+The alpha candidate passed strict Rust formatting/clippy, seven backend unit tests and fourteen
 isolated CLI/Textual tests. An isolated native Herdr test also verified a mouse click end to end,
 including the accepted frame id and the selected fictional station. Its fork passed 143 sidebar
 tests, 10 command-runner tests and 20 configuration/UI architecture checks.
 
-The checks exercise offline operation, configuration outside the checkout, Unicode/narrow
-panels, immutable click selection, UI navigation and resize. They use fictional fixtures and
+The checks exercise offline operation, configuration outside the checkout, which project each
+agent works for, Unicode/narrow panels, immutable click selection, UI navigation and resize. They use fictional fixtures and
 return a failing status for regressions. GitHub CI runs these checks on Linux.
 
 A click on a session's name is resolved by the click command, so its popup shows for a moment

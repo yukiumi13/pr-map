@@ -2,6 +2,7 @@
 import asyncio
 import os
 from pathlib import Path
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -46,6 +47,27 @@ class UITests(unittest.IsolatedAsyncioTestCase):
              patch("sys.argv", ["pr-map", "--popup"]):
             cli.main()
         self.assertEqual(focused, ["w1:p2"])
+
+    def test_a_clicked_project_opens_its_own_map(self):
+        opened = []
+        try:
+            with patch.object(prmap, "clicked", return_value=prmap.PROJECT + "example/harbor-ops"), \
+                 patch.object(PRMapApp, "run", lambda app: opened.append(app.clicked)), \
+                 patch("sys.argv", ["pr-map", "--popup"]):
+                cli.main()
+            self.assertEqual((prmap.REPO, opened), ("example/harbor-ops", [None]))
+            # That map loads live, not from the panel's frame of the session's own project.
+            calls = []
+
+            def run(command, **kwargs):
+                calls.append((command, kwargs["env"]["PRMAP_PROJECT"]))
+                return subprocess.CompletedProcess(command, 0, "{}", "")
+            with patch.dict(os.environ, {"HERDR_PANEL_FRAME_ID": "producer-1"}), \
+                 patch.object(prmap.subprocess, "run", run):
+                prmap.load(frame=True)
+            self.assertEqual(calls, [([prmap.BIN, "model"], "example/harbor-ops")])
+        finally:
+            prmap.REPO = None
 
     async def test_a_clicked_session_it_cannot_focus_opens_its_station(self):
         old_demo, old_bin = prmap.DEMO, prmap.BIN

@@ -2,9 +2,10 @@
 //!
 //! Subcommands:
 //!   minimap [--model FILE]  sidebar panel of the herdr fork, run by herdr every few seconds
-//!   report                  sets each herdr agent's `pr` sidebar token to its station and its
-//!                           pane title to the session name; prints the active pane's station;
-//!                           run by a herdr tab bar command
+//!   report                  sets each herdr agent's `pr` sidebar token to its station (or
+//!                           '◈ <repository>' for another project's agent) and its pane title
+//!                           to the session name; prints the active pane's token; run by a
+//!                           herdr tab bar command
 //!   model [--force]         the map model as JSON, for the full map (--force refetches PRs)
 //!   commits BRANCH          a station's own commits as JSON, for the full map's detail view
 //!
@@ -31,22 +32,30 @@ const HERDR_FETCH_TIMEOUT: f64 = 4.0;
 const MAP_FETCH_TIMEOUT: f64 = 40.0;
 
 /// Sets each agent's `pr` sidebar token to its station and its pane title to the session name,
-/// and clears stale ones.
+/// and clears stale ones. An agent working for another configured project shows that
+/// project's repository as '◈ <name>' instead of a station.
 ///
 /// herdr shows the token through `$pr` and the title through `pane` in [ui.sidebar.agents]
 /// rows. Only changed values are reported; the snapshot holds the values herdr currently
 /// displays. A pane label set by hand in herdr keeps precedence over the session name.
 ///
 /// Returns:
-///   The station of the active pane's session, or ''.
+///   The token of the active pane's agent, or ''.
 fn report(active_pane: Option<&str>) -> String {
     let snap = sources::herdr_snapshot();
     let model = model::cached(model::MODEL_TTL, HERDR_FETCH_TIMEOUT);
-    let by_pane: HashMap<&str, &model::Session> = model
+    // {pane: (token, session name)}.
+    let mut by_pane: HashMap<&str, (String, Option<&str>)> = model
         .sessions
         .iter()
-        .map(|s| (s.pane.as_str(), s))
+        .map(|s| (s.pane.as_str(), (s.station.clone(), s.name.as_deref())))
         .collect();
+    for other in &model.other_repos {
+        let token = format!("◈ {}", layout::repo_name(&other.repo));
+        for (pane, name) in &other.agents {
+            by_pane.insert(pane, (token.clone(), name.as_deref()));
+        }
+    }
     let agents = snap
         .as_ref()
         .and_then(|s| s["agents"].as_array())
@@ -54,15 +63,15 @@ fn report(active_pane: Option<&str>) -> String {
         .unwrap_or_default();
     for a in &agents {
         let pane = sessions::first_str(a, &["pane_id"]);
-        let session = by_pane.get(pane);
-        let station = session.map_or("", |s| s.station.as_str());
+        let (station, name) = by_pane
+            .get(pane)
+            .map_or(("", None), |(t, n)| (t.as_str(), *n));
         let shown_station = a
             .get("tokens")
             .and_then(|t| t.get("pr"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        let title = session
-            .and_then(|s| s.name.as_deref())
+        let title = name
             .filter(|_| sessions::first_str(a, &["label"]).is_empty())
             .unwrap_or("");
         let mut changes = Vec::new();
@@ -94,8 +103,7 @@ fn report(active_pane: Option<&str>) -> String {
     }
     active_pane
         .and_then(|p| by_pane.get(p))
-        .map_or("", |s| s.station.as_str())
-        .to_string()
+        .map_or(String::new(), |(token, _)| token.clone())
 }
 
 pub(crate) fn load_model(force: bool) -> Result<model::Model, String> {
@@ -124,12 +132,13 @@ Commands:
   minimap [--model FILE]        draw an ANSI sidebar panel
   commits BRANCH               print a station's commit list
   report                       update Herdr agent PR tokens and session-name titles
-  clicked ID X Y WIDTH HEIGHT  look up a cell in the accepted panel frame (a station, or
-                               ':pane:' and a session's pane)
+  clicked ID X Y WIDTH HEIGHT  look up a cell in the accepted panel frame (a station,
+                               ':pane:' and a session's pane, or ':project:' and a repository)
 
 Configuration: $PRMAP_CONFIG or $XDG_CONFIG_HOME/pr-map/config.toml
 TOML keys: repo = 'owner/repository', workspace = '/path', checkout = '/path', or several
-[[project]] tables with these keys; each Herdr session maps the one most of its agents work in.
+[[project]] tables with these keys; each Herdr session maps the one most of its agents work in,
+or the one $PRMAP_PROJECT names, and lists the others its agents work for.
 Without a config file, checkout and GitHub origin are inferred from the current directory.
 --demo uses bundled fictional data and never reads Git, GitHub or agent transcripts.
 The full-screen interface is pr-map (Python/Textual).";

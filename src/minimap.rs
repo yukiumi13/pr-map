@@ -16,15 +16,16 @@
 //! view shows the focused pane's session, marked by a pink cell (the ◈ itself when it is in the
 //! workspace on no PR branch). Other sessions colour their stations or follow them as dots, and
 //! an arrow in a session's colour on the edge points to one out of view. Zoomed out to one cell
-//! per station, stacks fold only as far as needed to fit. The last row names the focused
-//! session's position.
+//! per station, stacks fold only as far as needed to fit. Under the map, a row for each other
+//! configured project that agents here work for (sessions::owner) opens that project's map on
+//! a click. The last row names the focused session's position.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use indexmap::IndexMap;
 
 use crate::layout::{self, Kids, ROOT};
-use crate::model::{Kind, Model, Node, Session};
+use crate::model::{Kind, Model, Node, OtherRepo, Session};
 use crate::style::{self, cell_width, cells, fit, Rgb, ACCENT, BAR, DIM, FG, MUTED, UNTAGGED, YOU};
 
 /// (rows per lane, label rows under a station): one cell per station; '#N' and the name;
@@ -73,7 +74,8 @@ fn seg(text: &str, fg: Option<Rgb>, bg: Option<Rgb>, bold: bool) -> Seg {
     }
 }
 
-/// {(column, line): station} of the cells a click opens (a branch or ROOT).
+/// {(column, line): target} of the cells a click opens: a branch, ROOT, layout::PANE and a
+/// session's pane, or layout::PROJECT and another project's repository.
 pub type Hit = HashMap<(i64, i64), String>;
 
 /// The canvas the map is drawn on, with room for a view hanging past the map's far edges.
@@ -187,7 +189,10 @@ pub fn render(
         here.entry(layout::at(s, nodes)).or_default().push(s);
     }
     let (lane_h, labels) = ZOOMS[zoom];
-    let avail = (height - 1).max(1);
+    // Rows for other projects go between the map and the footer, leaving the map a row.
+    let repos: &[OtherRepo] =
+        &model.other_repos[..model.other_repos.len().min((height - 2).max(0) as usize)];
+    let avail = (height - 1 - repos.len() as i64).max(1);
 
     let full = layout::children(nodes);
     let active = layout::active_stacks(model);
@@ -707,16 +712,58 @@ pub fn render(
         })
         .collect();
 
+    // Each other project agents here work for: '◈ name ●●', and its open PRs. A pink ◈ marks
+    // the focused pane's.
+    let theirs = |o: &OtherRepo| pane.is_some_and(|p| o.agents.contains_key(p));
+    for o in repos {
+        let n = o.agents.len();
+        let dots = "●".repeat(n.min(3))
+            + &if n > 3 {
+                format!("+{}", n - 3)
+            } else {
+                String::new()
+            };
+        let prs = match o.open_prs {
+            Some(k) if k > 0 => format!(" {k} PR"),
+            _ => String::new(),
+        };
+        let name = fit(
+            layout::repo_name(&o.repo),
+            width - 3 - cells(&dots) - prs.len() as i64,
+        );
+        let target = format!("{}{}", layout::PROJECT, o.repo);
+        hit.extend((0..width).map(|x| ((x, rows.len() as i64), target.clone())));
+        let mark = theirs(o);
+        rows.push(vec![
+            if mark {
+                seg("◈", Some(MAP_BG), Some(YOU), true)
+            } else {
+                seg("◈", Some(DIM), None, true)
+            },
+            seg(" ", None, None, false),
+            seg(&name, Some(if mark { FG } else { DIM }), None, mark),
+            seg(" ", None, None, false),
+            seg(&dots, Some(MUTED), None, false),
+            seg(&prs, Some(MUTED), None, false),
+        ]);
+    }
+
     // The last row names the focused session's position.
-    let foot = match you {
-        None => vec![seg("no agent in this pane", Some(MUTED), None, false)],
-        Some(ROOT) => vec![
+    let other = model.other_repos.iter().find(|o| theirs(o));
+    let foot = match (you, other) {
+        (None, Some(o)) => vec![
+            seg("◈", Some(MAP_BG), Some(YOU), true),
+            seg(" ", None, None, false),
+            seg(layout::repo_name(&o.repo), Some(FG), None, true),
+        ],
+        (None, None) => vec![seg("no agent in this pane", Some(MUTED), None, false)],
+        (Some(ROOT), _) => vec![
             seg("◈", Some(MAP_BG), Some(YOU), true),
             seg(" ", None, None, false),
             seg(layout::repo_name(&model.repo), Some(FG), None, true),
             seg(" · no PR", Some(MUTED), None, false),
         ],
-        Some(b) => {
+        (Some(b), _) => {
             let n = &nodes[b];
             let stage = &n.stage_label;
             let number =
@@ -745,8 +792,11 @@ pub fn render(
             ]
         }
     };
-    if let Some(b) = you {
-        hit.extend((0..width).map(|x| ((x, rows.len() as i64), b.to_string())));
+    let foot_target = you
+        .map(str::to_string)
+        .or_else(|| other.map(|o| format!("{}{}", layout::PROJECT, o.repo)));
+    if let Some(t) = foot_target {
+        hit.extend((0..width).map(|x| ((x, rows.len() as i64), t.clone())));
     }
     rows.push(foot);
     // A narrow sidebar may not even fit the footer's fixed PR/stage text.

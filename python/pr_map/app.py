@@ -6,7 +6,8 @@ Usage:
                     Opened by a click on the herdr fork's sidebar minimap, it starts on the
                     clicked station (HERDR_PANEL_COLUMN, HERDR_PANEL_LINE, HERDR_PANEL_WIDTH,
                     HERDR_PANEL_HEIGHT); a click on a session's name focuses its pane instead
-                    and opens no map (cli.py), or shows that session when it cannot.
+                    and opens no map (cli.py), or shows that session when it cannot, and a
+                    click on another project's row opens that project's map.
   pr-map --json     print the model and exit
 
 The model comes from the Rust backend (`prmap`, see prmap.py).
@@ -20,12 +21,14 @@ in the title; grey when untagged) and turns orange when the PR does not contain 
 a dashed line leads to a draft, a dotted one to a local branch without a PR, and a grey line
 ending in ✕ to a PR closed without merging. '!' marks a Ready PR that needs a rebase; the detail
 panel lists all warnings. Stacks without a working session are folded to their first station.
+Other configured projects that agents in this Herdr session work for are listed under the
+sessions; p switches the map to the next of them.
 
 Mouse: drag the map to pan, click a station to open it, click a session to highlight it and
 double-click to jump to its pane.
 Keys: arrows/hjkl move, tab or enter goes to the station's sessions, enter on a session focuses
 its herdr pane, o folds or unfolds the stack, a unfolds all, f follows this pane's session,
-/ searches, 1-9 select a session's station, r refetches PRs, q quits.
+/ searches, 1-9 select a session's station, p maps the next project, r refetches PRs, q quits.
 """
 
 import os
@@ -121,6 +124,16 @@ def outside(model):
     """'outside the workspace: billing-api (1) · notebooks (2)'."""
     return "outside the workspace: " + " · ".join(
         f"{k} ({len(v)})" for k, v in sorted(model["elsewhere"].items()))
+
+
+def other_repos(model):
+    """'other repositories: lighthouse (1 agent, 2 open PRs) · p maps the next'."""
+    def plural(n, word):
+        return f"{n} {word}{'' if n == 1 else 's'}"
+    return "other repositories: " + " · ".join(
+        f"{layout.repo_name(o)} ({plural(len(o['agents']), 'agent')}"
+        + ("" if o["open_prs"] is None else f", {plural(o['open_prs'], 'open PR')}") + ")"
+        for o in model["other_repos"]) + " · p maps the next"
 
 
 # ---------------------------------------------------------------- map widget
@@ -462,7 +475,7 @@ class PRMapApp(App):
                 Binding("r", "refetch", "refetch PRs"), Binding("tab", "swap", "switch pane", priority=True),
                 Binding("enter", "enter", show=False), Binding("o,space", "fold", show=False),
                 Binding("a", "all", show=False), Binding("f", "follow", show=False),
-                Binding("slash", "search", show=False)] + \
+                Binding("p", "project", show=False), Binding("slash", "search", show=False)] + \
                [Binding(str(i), f"session({i})", show=False) for i in range(1, 10)]
 
     def __init__(self, popup=False, clicked=None):
@@ -497,10 +510,13 @@ class PRMapApp(App):
 
     @work(thread=True, exclusive=True, group="reload")
     def reload(self, force=False):
+        repo = prmap.REPO
         model = prmap.load(force, frame=not force and self.model is None)
-        if model is None and self.model is None and os.environ.get("HERDR_PANEL_FRAME_ID"):
+        if model is None and self.model is None and not repo and os.environ.get("HERDR_PANEL_FRAME_ID"):
             self.call_from_thread(self.notify, "Panel frame expired; showing the current map", severity="warning")
             model = prmap.load(force)
+        if model and repo != prmap.REPO:
+            return    # p switched projects meanwhile
         if model:
             self.call_from_thread(self.apply, model)
         else:
@@ -557,7 +573,9 @@ class PRMapApp(App):
             t.append(f"{key} ", Style(color=MUTED))
             t.append(f"{label} {'on' if on else 'off'}", Style(color=ACCENT if on else DIM))
             t.append(" · ", Style(color=GRID))
-        t.append("/ search · o fold · tab sessions · enter jump · r refetch · q quit", Style(color=MUTED))
+        t.append("/ search · o fold · tab sessions · enter jump · " +
+                 ("p next repo · " if self.model.get("other_repos") else "") + "r refetch · q quit",
+                 Style(color=MUTED))
         self.query_one("#title", Static).update(t)
 
     def _legend(self):
@@ -581,6 +599,8 @@ class PRMapApp(App):
             else:
                 t.append(f"→ {layout.repo_name(self.model)}, no PR", Style(color=MUTED))
             t.append("\n")
+        if self.model.get("other_repos"):
+            t.append(other_repos(self.model) + "\n", Style(color=MUTED))
         if self.model["elsewhere"]:
             t.append(outside(self.model) + "\n", Style(color=MUTED))
         if not self.model["herdr"]:
@@ -810,6 +830,21 @@ class PRMapApp(App):
             m.select(hits[0])
         else:
             self.notify(f"no station matches {event.value!r}", severity="warning")
+
+    def action_project(self):
+        """Maps the next other project, in config order, that agents here work for."""
+        repos = self.model.get("other_repos") if self.model else None
+        if not repos:
+            self.notify("no other repository has agents in this session", severity="warning")
+            return
+        prmap.REPO = repos[0]["repo"]
+        self.model, self.clicked = None, None
+        m = self.query_one(MetroMap)
+        m.selected = None
+        m.opened.clear()
+        m.closed.clear()
+        self.query_one("#title", Static).update(f"PR map · loading {layout.repo_name(repos[0])}…")
+        self.reload()
 
     def action_refetch(self):
         self.notify("refetching PRs…")

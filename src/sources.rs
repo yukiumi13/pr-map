@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use indexmap::IndexMap;
 use serde_json::Value;
 
-use crate::config;
+use crate::config::{self, Project};
 use crate::sys;
 
 /// Seconds before the PR cache is refetched.
@@ -14,14 +14,14 @@ const PR_TTL: f64 = 300.0;
 const PR_FIELDS: &str = "number,title,headRefName,baseRefName,headRefOid,baseRefOid,isDraft,\
                          reviewDecision,url,updatedAt,state,closedAt";
 
-/// Refetches all PRs into ~/.cache/pr-map/prs.json; false when gh fails.
-fn fetch_prs(timeout: f64) -> bool {
+/// Refetches all of a project's PRs into its cache's prs.json; false when gh fails.
+fn fetch_prs(project: &Project, timeout: f64) -> bool {
     let cmd = [
         "gh",
         "pr",
         "list",
         "--repo",
-        &config::get().repo,
+        &project.repo,
         "--state",
         "all",
         "--limit",
@@ -35,13 +35,13 @@ fn fetch_prs(timeout: f64) -> bool {
         return false;
     };
     let data = serde_json::json!({"fetched_at": sys::now(), "prs": prs});
-    sys::write_cache("prs.json", data.to_string().as_bytes());
+    sys::write_cache_in(&project.cache, "prs.json", data.to_string().as_bytes());
     true
 }
 
-/// (prs, fetched_at) from the cache.
-fn load_prs() -> (Vec<Value>, f64) {
-    let cached = std::fs::read(sys::cache_dir().join("prs.json"))
+/// (prs, fetched_at) from a project's cache; fetched_at is 0 without one.
+pub fn load_prs(project: &Project) -> (Vec<Value>, f64) {
+    let cached = std::fs::read(project.cache.join("prs.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     match cached {
@@ -53,13 +53,14 @@ fn load_prs() -> (Vec<Value>, f64) {
     }
 }
 
-/// (prs, fetched_at), refetched when the cache is older than PR_TTL or `force` is set.
+/// A project's (prs, fetched_at), refetched when its cache is older than PR_TTL or `force` is
+/// set.
 ///
 /// `timeout` limits the refetch; callers run by herdr stay below herdr's own timeout.
-pub fn fresh_prs(force: bool, timeout: f64) -> (Vec<Value>, f64) {
-    let (prs, fetched_at) = load_prs();
-    if (force || sys::now() - fetched_at > PR_TTL) && fetch_prs(timeout) {
-        return load_prs();
+pub fn fresh_prs(project: &Project, force: bool, timeout: f64) -> (Vec<Value>, f64) {
+    let (prs, fetched_at) = load_prs(project);
+    if (force || sys::now() - fetched_at > PR_TTL) && fetch_prs(project, timeout) {
+        return load_prs(project);
     }
     (prs, fetched_at)
 }
@@ -101,7 +102,7 @@ impl Git {
                 &[
                     "git",
                     "-C",
-                    &config::get().checkout,
+                    &config::get().project().checkout,
                     "merge-base",
                     "--is-ancestor",
                     a,
@@ -126,7 +127,7 @@ impl Git {
                 &[
                     "git",
                     "-C",
-                    &config::get().checkout,
+                    &config::get().project().checkout,
                     "rev-list",
                     "--count",
                     &format!("{a}..{b}"),
@@ -174,7 +175,7 @@ pub fn local_heads() -> IndexMap<String, String> {
     let cmd = [
         "git",
         "-C",
-        &config::get().checkout,
+        &config::get().project().checkout,
         "for-each-ref",
         "refs/heads",
         "--format=%(refname:short) %(objectname)",

@@ -1,7 +1,9 @@
 //! Process configuration and cache identity, loaded once at the command boundary.
 //!
 //! The config file names one project with top-level keys, or several as `[[project]]` tables
-//! with the same keys. With several, each Herdr session maps the one most of its agents work in.
+//! with the same keys. With several, each Herdr session maps the one most of its agents work
+//! in, or the one $PRMAP_PROJECT names; the map lists the others its agents work for
+//! (sessions::owner).
 use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -12,12 +14,57 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct Config {
-    pub repo: String,
-    pub workspace: String,
-    pub checkout: String,
-    pub aliases: Vec<String>,
-    pub cache: PathBuf,
+    /// Every configured project, in config order.
+    pub projects: Vec<Project>,
+    /// Index of the project this process maps.
+    pub current: usize,
     pub demo: bool,
+}
+
+impl Config {
+    /// The project this process maps.
+    pub fn project(&self) -> &Project {
+        &self.projects[self.current]
+    }
+}
+
+/// A configured project.
+#[derive(Clone, Debug)]
+pub struct Project {
+    /// 'owner/repository' on GitHub.
+    pub repo: String,
+    /// The directory its agents work in.
+    pub workspace: String,
+    /// The checkout whose objects and registered worktrees hold its branches.
+    pub checkout: String,
+    /// Compatibility links to the workspace in older transcript paths.
+    pub aliases: Vec<String>,
+    /// Its cache directory, separated by repository, checkout and Herdr session.
+    pub cache: PathBuf,
+}
+
+impl Project {
+    /// The directories its agents work in, each with whether it is a worktree: its workspace,
+    /// aliases and `trees` (sources::worktrees of its checkout).
+    pub fn roots(&self, trees: &[(String, String)]) -> Vec<(String, bool)> {
+        std::iter::once(&self.workspace)
+            .chain(&self.aliases)
+            .map(|r| (r.clone(), false))
+            .chain(trees.iter().map(|(p, _)| (p.clone(), true)))
+            .collect()
+    }
+}
+
+/// How deep `roots` reach around `dir`: (length of the deepest root containing it, whether a
+/// worktree is among those that deep), or None when no root contains it.
+pub fn claim(roots: &[(String, bool)], dir: &str) -> Option<(usize, bool)> {
+    let dir = format!("{}/", dir.trim_end_matches('/'));
+    roots
+        .iter()
+        .map(|(root, tree)| (format!("{}/", root.trim_end_matches('/')), *tree))
+        .filter(|(root, _)| dir.starts_with(root.as_str()))
+        .map(|(root, tree)| (root.len(), tree))
+        .max()
 }
 
 /// One project as the config file gives it; absent parts are inferred from the checkout.
@@ -36,9 +83,6 @@ struct FileProject {
 struct FileProjects {
     project: Vec<FileProject>,
 }
-
-/// A resolved project: (repo, workspace, checkout, aliases).
-type Project = (String, String, String, Vec<String>);
 
 pub fn get() -> &'static Config {
     CONFIG.get().expect("configuration initialized by main")
@@ -91,40 +135,69 @@ fn resolve(file: FileProject, base: &Path) -> Result<Project, String> {
     if !valid_repo(&repo) {
         return Err("repo must have the form owner/repository".into());
     }
-    Ok((repo, workspace, checkout, file.aliases))
+    Ok(Project {
+        cache: cache_of(&repo, &workspace, &checkout),
+        repo,
+        workspace,
+        checkout,
+        aliases: file.aliases,
+    })
 }
 
-/// The project most of the snapshot's agents work in, below its workspace, an alias or one of
-/// its worktrees; the first one listed on a tie, without matching agents or without a snapshot.
-fn select(mut projects: Vec<Project>, snap: Option<&serde_json::Value>) -> Project {
-    let cwds: Vec<String> = snap
+/// A project's cache directory, stable across processes.
+fn cache_of(repo: &str, workspace: &str, checkout: &str) -> PathBuf {
+    let session = ["HERDR_SOCKET_PATH", "HERDR_SESSION_NAME"]
+        .map(|k| std::env::var(k).unwrap_or_default())
+        .join("\0");
+    let identity = format!("{repo}\0{workspace}\0{checkout}\0{session}");
+    let hash = identity.bytes().fold(0xcbf29ce484222325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+    });
+    xdg("XDG_CACHE_HOME", ".cache")
+        .join("pr-map")
+        .join(format!("{hash:016x}"))
+}
+
+fn xdg(key: &str, suffix: &str) -> PathBuf {
+    std::env::var_os(key)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::sys::home().join(suffix))
+}
+
+/// The project most of the snapshot's agents work in; the first listed on a tie.
+///
+/// An agent counts for the projects with the deepest root around its directory (`claim`):
+/// one in a worktree inside another project's workspace counts for the worktree's project
+/// only, one in a directory that is both one project's workspace and another's checkout for
+/// both.
+fn select(projects: &[Project], snap: Option<&serde_json::Value>) -> usize {
+    let roots: Vec<Vec<(String, bool)>> = projects
+        .iter()
+        .map(|p| p.roots(&crate::sources::worktrees(&p.checkout)))
+        .collect();
+    let mut counts = vec![0; projects.len()];
+    for a in snap
         .and_then(|s| s["agents"].as_array())
         .into_iter()
         .flatten()
-        .map(|a| crate::sessions::first_str(a, &["foreground_cwd", "cwd"]))
-        .map(|c| format!("{}/", c.trim_end_matches('/')))
-        .collect();
-    let agents_in = |(_, workspace, checkout, aliases): &Project| {
-        let roots: Vec<String> = std::iter::once(workspace)
-            .chain(aliases)
-            .cloned()
-            .chain(
-                crate::sources::worktrees(checkout)
-                    .into_iter()
-                    .map(|(p, _)| p),
-            )
-            .map(|r| format!("{}/", r.trim_end_matches('/')))
+    {
+        let dir = crate::sessions::first_str(a, &["foreground_cwd", "cwd"]);
+        let depths: Vec<Option<usize>> = roots
+            .iter()
+            .map(|r| claim(r, dir).map(|(depth, _)| depth))
             .collect();
-        cwds.iter()
-            .filter(|c| roots.iter().any(|r| c.starts_with(r.as_str())))
-            .count()
-    };
-    let best = projects
+        let deepest = depths.iter().flatten().max().copied();
+        for (count, depth) in counts.iter_mut().zip(&depths) {
+            if depth.is_some() && *depth == deepest {
+                *count += 1;
+            }
+        }
+    }
+    counts
         .iter()
         .enumerate()
-        .max_by_key(|(i, p)| (agents_in(p), Reverse(*i)))
-        .map_or(0, |(i, _)| i);
-    projects.swap_remove(best)
+        .max_by_key(|(i, c)| (**c, Reverse(*i)))
+        .map_or(0, |(i, _)| i)
 }
 
 fn absolute(path: &Path, base: &Path) -> Result<String, String> {
@@ -140,81 +213,72 @@ fn absolute(path: &Path, base: &Path) -> Result<String, String> {
 
 impl Config {
     pub fn load(path: Option<&str>, demo: bool, fixture: bool) -> Result<Self, String> {
-        let home = crate::sys::home();
-        let xdg = |key: &str, suffix: &str| {
-            std::env::var_os(key)
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(suffix))
-        };
         let default = xdg("XDG_CONFIG_HOME", ".config").join("pr-map/config.toml");
         let selected = path
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("PRMAP_CONFIG").map(PathBuf::from));
         let file = selected.as_deref().unwrap_or(&default);
-        let (repo, workspace, checkout, aliases) = if demo || fixture {
-            (
-                "example/harbor".into(),
-                "/demo/harbor".into(),
-                "/demo/harbor".into(),
-                Vec::new(),
-            )
-        } else {
-            let text = match std::fs::read_to_string(file) {
-                Ok(text) => text,
-                Err(e) if selected.is_none() && e.kind() == std::io::ErrorKind::NotFound => {
-                    String::new()
-                }
-                Err(e) => return Err(format!("{}: {e}", file.display())),
-            };
-            let invalid = |e: toml::de::Error| format!("{}: {e}", file.display());
-            let table: toml::Table = toml::from_str(&text).map_err(invalid)?;
-            // [[project]] tables exclude top-level project keys: FileProjects denies them.
-            let files = if table.contains_key("project") {
-                toml::Value::Table(table)
-                    .try_into::<FileProjects>()
-                    .map_err(invalid)?
-                    .project
-            } else {
-                vec![toml::Value::Table(table)
-                    .try_into::<FileProject>()
-                    .map_err(invalid)?]
-            };
-            if files.is_empty() {
-                return Err(format!("{}: no [[project]] listed", file.display()));
+        if demo || fixture {
+            let (repo, root) = ("example/harbor", "/demo/harbor");
+            return Ok(Self {
+                projects: vec![Project {
+                    repo: repo.into(),
+                    workspace: root.into(),
+                    checkout: root.into(),
+                    aliases: Vec::new(),
+                    cache: cache_of(repo, root, root),
+                }],
+                current: 0,
+                demo,
+            });
+        }
+        let text = match std::fs::read_to_string(file) {
+            Ok(text) => text,
+            Err(e) if selected.is_none() && e.kind() == std::io::ErrorKind::NotFound => {
+                String::new()
             }
-            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-            let base = if text.is_empty() {
-                cwd.as_path()
-            } else {
-                file.parent().unwrap_or(&cwd)
-            };
-            let mut projects = files
-                .into_iter()
-                .map(|f| resolve(f, base))
-                .collect::<Result<Vec<_>, _>>()?;
-            if projects.len() == 1 {
-                projects.remove(0)
-            } else {
-                select(projects, crate::sources::herdr_snapshot().as_ref())
-            }
+            Err(e) => return Err(format!("{}: {e}", file.display())),
         };
-        // Stable across processes, separated by repository, checkout and Herdr session.
-        let session = ["HERDR_SOCKET_PATH", "HERDR_SESSION_NAME"]
-            .map(|k| std::env::var(k).unwrap_or_default())
-            .join("\0");
-        let identity = format!("{repo}\0{workspace}\0{checkout}\0{session}");
-        let hash = identity.bytes().fold(0xcbf29ce484222325_u64, |h, b| {
-            (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
-        });
-        let cache = xdg("XDG_CACHE_HOME", ".cache")
-            .join("pr-map")
-            .join(format!("{hash:016x}"));
+        let invalid = |e: toml::de::Error| format!("{}: {e}", file.display());
+        let table: toml::Table = toml::from_str(&text).map_err(invalid)?;
+        // [[project]] tables exclude top-level project keys: FileProjects denies them.
+        let files = if table.contains_key("project") {
+            toml::Value::Table(table)
+                .try_into::<FileProjects>()
+                .map_err(invalid)?
+                .project
+        } else {
+            vec![toml::Value::Table(table)
+                .try_into::<FileProject>()
+                .map_err(invalid)?]
+        };
+        if files.is_empty() {
+            return Err(format!("{}: no [[project]] listed", file.display()));
+        }
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        let base = if text.is_empty() {
+            cwd.as_path()
+        } else {
+            file.parent().unwrap_or(&cwd)
+        };
+        let projects = files
+            .into_iter()
+            .map(|f| resolve(f, base))
+            .collect::<Result<Vec<_>, _>>()?;
+        let current = match std::env::var("PRMAP_PROJECT")
+            .ok()
+            .filter(|r| !r.is_empty())
+        {
+            Some(repo) => projects
+                .iter()
+                .position(|p| p.repo == repo)
+                .ok_or_else(|| format!("PRMAP_PROJECT: {repo} is not a configured project"))?,
+            None if projects.len() == 1 => 0,
+            None => select(&projects, crate::sources::herdr_snapshot().as_ref()),
+        };
         Ok(Self {
-            repo,
-            workspace,
-            checkout,
-            aliases,
-            cache,
+            projects,
+            current,
             demo,
         })
     }
@@ -244,35 +308,50 @@ mod tests {
     }
 
     fn project(repo: &str, workspace: &str, aliases: &[&str]) -> Project {
-        let aliases = aliases.iter().map(|a| a.to_string()).collect();
-        (
-            repo.into(),
-            workspace.into(),
-            "/nonexistent".into(),
-            aliases,
-        )
+        Project {
+            repo: repo.into(),
+            workspace: workspace.into(),
+            checkout: "/nonexistent".into(),
+            aliases: aliases.iter().map(|a| a.to_string()).collect(),
+            cache: PathBuf::new(),
+        }
     }
 
-    fn pick(cwds: Option<&[&str]>) -> String {
-        let projects = vec![
-            project("o/a", "/w/a", &[]),
-            project("o/b", "/w/b", &["/old/b"]),
-        ];
+    fn pick(projects: &[Project], cwds: Option<&[&str]>) -> String {
         let agents: Option<Vec<serde_json::Value>> =
             cwds.map(|c| c.iter().map(|d| serde_json::json!({"cwd": d})).collect());
         let snap = agents.map(|a| serde_json::json!({ "agents": a }));
-        select(projects, snap.as_ref()).0
+        projects[select(projects, snap.as_ref())].repo.clone()
     }
 
     #[test]
     fn a_session_maps_the_project_most_of_its_agents_work_in() {
+        let two = [
+            project("o/a", "/w/a", &[]),
+            project("o/b", "/w/b", &["/old/b"]),
+        ];
         // '/w/bb' is not below '/w/b'; an alias counts for its project.
-        assert_eq!(pick(Some(&["/w/a", "/w/a/x", "/w/bb", "/old/b/y"])), "o/a");
-        assert_eq!(pick(Some(&["/w/a", "/w/b/x", "/old/b/y"])), "o/b");
+        assert_eq!(
+            pick(&two, Some(&["/w/a", "/w/a/x", "/w/bb", "/old/b/y"])),
+            "o/a"
+        );
+        assert_eq!(pick(&two, Some(&["/w/a", "/w/b/x", "/old/b/y"])), "o/b");
         // A tie, no matching agent or no snapshot keeps the first project listed.
-        assert_eq!(pick(Some(&["/w/a", "/w/b"])), "o/a");
-        assert_eq!(pick(Some(&["/elsewhere"])), "o/a");
-        assert_eq!(pick(None), "o/a");
+        assert_eq!(pick(&two, Some(&["/w/a", "/w/b"])), "o/a");
+        assert_eq!(pick(&two, Some(&["/elsewhere"])), "o/a");
+        assert_eq!(pick(&two, None), "o/a");
+        // An agent counts for the projects with the deepest root around it: below '/w/a/c' for
+        // c alone, in the rest of '/w/a' for both a and d.
+        let nested = [
+            project("o/a", "/w/a", &[]),
+            project("o/c", "/w/a/c", &[]),
+            project("o/d", "/w/a", &[]),
+        ];
+        assert_eq!(
+            pick(&nested, Some(&["/w/a/c/x", "/w/a/c", "/w/a/y"])),
+            "o/c"
+        );
+        assert_eq!(pick(&nested, Some(&["/w/a/c/x", "/w/a/y", "/w/a"])), "o/a");
     }
 
     #[test]
@@ -286,9 +365,10 @@ mod tests {
         };
         let one = "[[project]]\nrepo = 'o/a'\ncheckout = '.'\n";
         let config = load(one).unwrap();
+        let project = config.project();
         assert_eq!(
-            (config.repo.as_str(), config.workspace.as_str()),
-            ("o/a", config.checkout.as_str())
+            (project.repo.as_str(), project.workspace.as_str()),
+            ("o/a", project.checkout.as_str())
         );
         assert!(load(&format!("repo = 'o/b'\n{one}")).is_err());
         assert!(load("project = []\n").is_err());

@@ -8,7 +8,8 @@
 //!   Titles    `[<Domain>: <Category>] [<Stage>] [k/n] summary` (tagged PR titles) gives each
 //!             PR its category, which names its station and colours the line to it, its stage
 //!             and summary. Untagged PRs and local branches are named after their branch.
-//!   Sessions  herdr's snapshot, each agent placed by its transcript (sessions.rs).
+//!   Sessions  herdr's snapshot, each agent placed by its transcript (sessions.rs). Agents that
+//!             work for another configured project (sessions::owner) are listed by project.
 //!   Commits   a commit is confirmed for a session when the output of that session's git commit,
 //!             rebase or cherry-pick call shows the commit's sha; otherwise it is inferred when
 //!             such a call on the same branch precedes the committer time by at most COMMIT_LAG.
@@ -16,8 +17,7 @@
 //! The model is cached in the configured cache namespace, so the minimap, the sidebar tokens and the
 //! full map share one build every MODEL_TTL seconds.
 
-use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
 
 use indexmap::IndexMap;
@@ -153,7 +153,7 @@ impl Node {
     }
 }
 
-/// A herdr agent working in the workspace.
+/// A herdr agent working for the mapped project.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub pane: String,
@@ -178,6 +178,16 @@ pub struct Session {
     pub station: String,
 }
 
+/// Another configured project that agents in this Herdr session work for.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OtherRepo {
+    pub repo: String,
+    /// {pane: the session's name, as Session::name} of its agents.
+    pub agents: IndexMap<String, Option<String>>,
+    /// Its open PRs, from its PR cache; None before that cache is first filled.
+    pub open_prs: Option<usize>,
+}
+
 /// Colours that stay with a session or category across refreshes (style::stable_colors).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Colors {
@@ -193,8 +203,12 @@ pub struct Model {
     pub fetched_at: f64,
     pub nodes: IndexMap<String, Node>,
     pub sessions: Vec<Session>,
-    /// {directory: [status]} of agents outside the workspace.
+    /// {directory: [status]} of agents that work for no configured project.
     pub elsewhere: IndexMap<String, Vec<String>>,
+    /// The other configured projects that agents here work for, in config order from the one
+    /// after the mapped project.
+    #[serde(default)]
+    pub other_repos: Vec<OtherRepo>,
     /// Whether herdr's snapshot was available.
     pub herdr: bool,
     pub colors: Colors,
@@ -298,13 +312,10 @@ fn hints(node: &Node, nodes: &IndexMap<String, Node>) -> Vec<String> {
     out
 }
 
-/// Builds the map model from PRs, herdr's snapshot and the git store.
-pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Git) -> Model {
-    let trees = sources::worktrees(&config::get().checkout);
-    let heads = sources::local_heads();
+/// The PRs a map shows: open ones and those closed without merging in the last CLOSED_DAYS.
+fn on_map(prs: Vec<Value>) -> Vec<Pr> {
     let cutoff = sys::now() - CLOSED_DAYS * 86400.0;
-    let prs: Vec<Pr> = prs
-        .into_iter()
+    prs.into_iter()
         .filter_map(|v| serde_json::from_value::<Pr>(v).ok())
         .filter(|p| {
             p.state == "OPEN"
@@ -314,11 +325,46 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
                         .and_then(sys::epoch)
                         .is_some_and(|t| t > cutoff)
         })
-        .collect();
-    let pr_by_number: HashMap<u64, Pr> = prs.iter().map(|p| (p.number, p.clone())).collect();
-    let locator = Locator::new(&trees, pr_by_number.keys().copied().collect());
+        .collect()
+}
 
-    // Sessions: agents in the workspace or on a branch of the map; the rest are 'elsewhere'.
+/// Builds the map model from PRs, herdr's snapshot and the git store.
+pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Git) -> Model {
+    let config = config::get();
+    let trees = sources::worktrees(&config.project().checkout);
+    let heads = sources::local_heads();
+    let prs = on_map(prs);
+    let pr_heads = |prs: &[Pr]| {
+        prs.iter()
+            .map(|p| (p.number, p.head_ref_name.clone()))
+            .collect::<HashMap<_, _>>()
+    };
+    // Each configured project's worktrees and PRs decide which agents work for it
+    // (sessions::owner); the other projects' PRs come from their caches.
+    let mut open_prs = vec![None; config.projects.len()];
+    let locators: Vec<Locator> = config
+        .projects
+        .iter()
+        .enumerate()
+        .map(|(i, project)| {
+            if i == config.current {
+                return Locator::new(project, &trees, pr_heads(&prs));
+            }
+            let (cached, fetched_at) = sources::load_prs(project);
+            let listed = on_map(cached);
+            open_prs[i] =
+                (fetched_at > 0.0).then(|| listed.iter().filter(|p| p.state == "OPEN").count());
+            Locator::new(
+                project,
+                &sources::worktrees(&project.checkout),
+                pr_heads(&listed),
+            )
+        })
+        .collect();
+    let locator = &locators[config.current];
+
+    // Sessions: agents that work for this project; the rest are listed by project or as
+    // 'elsewhere'.
     let list = |key: &str| {
         snap.as_ref()
             .and_then(|s| s.get(key))
@@ -345,29 +391,53 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
         .as_ref()
         .map(|s| sessions::first_str(s, &["focused_pane_id"]))
         .unwrap_or("");
-    let (mut sessions, mut elsewhere) = (
+    let (mut sessions, mut elsewhere, mut others) = (
         Vec::<Session>::new(),
         IndexMap::<String, Vec<String>>::new(),
+        BTreeMap::<usize, OtherRepo>::new(),
     );
     for a in list("agents") {
-        let cwd = locator.normalize(sessions::first_str(&a, &["foreground_cwd", "cwd"]));
-        let (place, name) = sessions::locate(&a, &locator, &pr_by_number);
+        let dir = sessions::first_str(&a, &["foreground_cwd", "cwd"]);
+        let (place, name) = sessions::locate(&a, locator);
         let status = a
             .get("agent_status")
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
-        if !Path::new(&cwd).starts_with(&config::get().workspace) && place.current.is_none() {
-            let trimmed = cwd.trim_end_matches('/');
-            let name = trimmed
-                .rsplit('/')
-                .next()
-                .filter(|n| !n.is_empty())
-                .unwrap_or(&cwd);
-            elsewhere.entry(name.to_string()).or_default().push(status);
-            continue;
-        }
         let pane = sessions::first_str(&a, &["pane_id"]).to_string();
+        let title = sessions::first_str(&a, &["terminal_title_stripped"]).to_string();
+        // The terminal title names a session whose id herdr has not recognised yet.
+        let name = name.or_else(|| sessions::clean_name(&title));
+        let owner = sessions::owner(dir, &locators, |i| {
+            if i == config.current {
+                place.how != "cwd"
+            } else {
+                sessions::locate(&a, &locators[i]).0.how != "cwd"
+            }
+        });
+        match owner {
+            Some(i) if i == config.current => {}
+            Some(i) => {
+                let other = others.entry(i).or_insert_with(|| OtherRepo {
+                    repo: config.projects[i].repo.clone(),
+                    agents: IndexMap::new(),
+                    open_prs: open_prs[i],
+                });
+                other.agents.insert(pane, name);
+                continue;
+            }
+            None => {
+                let cwd = locator.normalize(dir);
+                let trimmed = cwd.trim_end_matches('/');
+                let name = trimmed
+                    .rsplit('/')
+                    .next()
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or(&cwd);
+                elsewhere.entry(name.to_string()).or_default().push(status);
+                continue;
+            }
+        }
         let mut tab = tabs
             .get(sessions::first_str(&a, &["tab_id"]))
             .cloned()
@@ -379,9 +449,6 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
             tab = format!("{space}:{tab}").trim_matches(':').to_string();
         }
         let agent = a.get("agent").and_then(Value::as_str).map(str::to_string);
-        let title = sessions::first_str(&a, &["terminal_title_stripped"]).to_string();
-        // The terminal title names a session whose id herdr has not recognised yet.
-        let name = name.or_else(|| sessions::clean_name(&title));
         let label = match &name {
             Some(name) => name.clone(),
             None if tab.is_empty() => pane.clone(),
@@ -402,6 +469,10 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
             station: String::new(),
         });
     }
+    let n = config.projects.len();
+    let other_repos: Vec<OtherRepo> = (1..n)
+        .filter_map(|k| others.remove(&((config.current + k) % n)))
+        .collect();
     let mut used = BTreeSet::new();
     for s in &mut sessions {
         let base = sessions::initials(&s.label);
@@ -511,12 +582,13 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
         category: style::stable_colors("category", &categories, style::ROUTES),
     };
     Model {
-        repo: config::get().repo.clone(),
-        git: config::get().checkout.clone(),
+        repo: config.project().repo.clone(),
+        git: config.project().checkout.clone(),
         fetched_at,
         nodes,
         sessions,
         elsewhere,
+        other_repos,
         herdr: snap.is_some(),
         colors,
     }
@@ -528,8 +600,29 @@ pub fn build(prs: Vec<Value>, fetched_at: f64, snap: Option<Value>, git: &mut Gi
 ///   force: refetch PRs even when their cache is fresh.
 ///   fetch_timeout: limit for a PR refetch; callers run by herdr stay below herdr's timeout.
 pub fn fresh(force: bool, fetch_timeout: f64) -> Model {
-    let (prs, fetched_at) = sources::fresh_prs(force, fetch_timeout);
-    let model = build(prs, fetched_at, sources::herdr_snapshot(), &mut Git::load());
+    let config = config::get();
+    let snap = sources::herdr_snapshot();
+    let dirs: Vec<&str> = snap
+        .as_ref()
+        .and_then(|s| s["agents"].as_array())
+        .into_iter()
+        .flatten()
+        .map(|a| sessions::first_str(a, &["foreground_cwd", "cwd"]))
+        .collect();
+    // Other projects an agent here works in keep their open PR counts fresh, fetched alongside.
+    let (prs, fetched_at) = std::thread::scope(|scope| {
+        for (i, project) in config.projects.iter().enumerate() {
+            if i == config.current {
+                continue;
+            }
+            let roots = project.roots(&sources::worktrees(&project.checkout));
+            if dirs.iter().any(|d| config::claim(&roots, d).is_some()) {
+                scope.spawn(move || sources::fresh_prs(project, false, fetch_timeout));
+            }
+        }
+        sources::fresh_prs(config.project(), force, fetch_timeout)
+    });
+    let model = build(prs, fetched_at, snap, &mut Git::load());
     sys::write_cache(
         "model.json",
         &serde_json::to_vec(&model).unwrap_or_default(),

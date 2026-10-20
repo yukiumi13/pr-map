@@ -108,6 +108,78 @@ class CLITests(unittest.TestCase):
         # The session name becomes the pane title; a label set by hand keeps precedence.
         self.assertEqual(log.read_text().splitlines(), ["w1:p1 --source pr-map --title search tuning"])
 
+    def test_agents_work_for_the_project_that_places_them(self):
+        tools = self.root / "bin"
+        tools.mkdir()
+        for tool in ["git", "cat"]:
+            (tools / tool).symlink_to(shutil.which(tool))
+        (tools / "gh").write_text("#!/bin/sh\nexit 1\n")
+        (tools / "herdr").write_text('#!/bin/sh\ncase "$1 $2" in\n'
+                                     '  "api snapshot") cat "$SNAPSHOT" ;;\n'
+                                     '  "pane report-metadata") shift 2; echo "$*" >> "$LOG" ;;\n'
+                                     '  *) exit 1 ;;\nesac\n')
+        for tool in ["gh", "herdr"]:
+            (tools / tool).chmod(0o755)
+        # example/harbor-ops is the workspace's own repository; example/harbor works from that
+        # workspace with its checkout and a worktree inside it.
+        ws = self.root / "ws"
+        git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+        for repo in [ws, ws / "harbor"]:
+            subprocess.run(["git", "init", "--initial-branch=main", str(repo)], check=True, capture_output=True)
+            subprocess.run([*git, "-C", str(repo), "commit", "--allow-empty", "-m", "init"],
+                           check=True, capture_output=True)
+        search = ws / "experiments" / "search"
+        subprocess.run([*git, "-C", str(ws / "harbor"), "worktree", "add", "-b", "feat/search", str(search)],
+                       check=True, capture_output=True)
+        cfg = self.root / "config.toml"
+        cfg.write_text('[[project]]\nrepo = "example/harbor"\nworkspace = "ws"\ncheckout = "ws/harbor"\n\n'
+                       '[[project]]\nrepo = "example/harbor-ops"\ncheckout = "ws"\n')
+        # The session in the workspace that edits harbor's worktree works for harbor.
+        transcript = self.root / ".claude" / "projects" / "ws" / "s2.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text("\n".join(json.dumps(r) for r in [
+            {"type": "assistant", "timestamp": "2026-10-19T12:00:00Z", "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": f"{search}/app.py"}}]}},
+            {"type": "user", "timestamp": "2026-10-19T12:00:01Z", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1"}]}}]) + "\n")
+        agent = {"agent": "claude", "agent_status": "idle", "tab_id": "w1:t1", "workspace_id": "w1", "tokens": {}}
+        snapshot = self.root / "snapshot.json"
+        snapshot.write_text(json.dumps({"result": {"snapshot": {
+            "agents": [agent | {"pane_id": "w1:p1", "cwd": str(search)},
+                       agent | {"pane_id": "w1:p2", "cwd": str(ws), "agent_session": {"value": "s2"}},
+                       agent | {"pane_id": "w1:p3", "cwd": str(ws), "terminal_title_stripped": "ops chores"},
+                       agent | {"pane_id": "w1:p4", "cwd": "/nonexistent/tools"}],
+            "tabs": [{"tab_id": "w1:t1", "label": "1"}],
+            "workspaces": [{"workspace_id": "w1", "label": "harbor"}]}}}))
+        env = {"PATH": str(tools), "SNAPSHOT": str(snapshot), "LOG": str(self.root / "report.log")}
+
+        model = self.data("--config", str(cfg), "model", **env)
+        self.assertEqual(model["repo"], "example/harbor")
+        self.assertEqual({s["pane"]: s["current"] for s in model["sessions"]},
+                         {"w1:p1": "feat/search", "w1:p2": "feat/search"})
+        self.assertEqual(model["other_repos"], [
+            {"repo": "example/harbor-ops", "agents": {"w1:p3": "ops chores"}, "open_prs": None}])
+        self.assertEqual(list(model["elsewhere"]), ["tools"])
+        ops = self.data("--config", str(cfg), "model", PRMAP_PROJECT="example/harbor-ops", **env)
+        self.assertEqual([s["pane"] for s in ops["sessions"]], ["w1:p3"])
+        self.assertEqual([(o["repo"], sorted(o["agents"])) for o in ops["other_repos"]],
+                         [("example/harbor", ["w1:p1", "w1:p2"])])
+
+        # The panel row of the other project opens its map; its agent's pane is marked there.
+        result = self.command("--config", str(cfg), "minimap", HERDR_PANEL_FRAME_ID="multi-1",
+                              HERDR_ACTIVE_PANE_ID="w1:p3", COLUMNS="26", LINES="12", **env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = json.loads(next((self.root / "cache").glob("pr-map/*/frames/multi-1.json")).read_text())
+        x, y, target = next(cell for cell in record["hit"] if cell[2].startswith(":project:"))
+        self.assertEqual(target, ":project:example/harbor-ops")
+        self.assertEqual(self.data("--config", str(cfg), "clicked", "multi-1", str(x), str(y), "26", "12", **env),
+                         target)
+        self.assertIn("harbor-ops", result.stdout.splitlines()[-1])
+        # Herdr's Agents rows show that agent's repository and session name.
+        self.assertEqual(self.command("--config", str(cfg), "report", **env).returncode, 0)
+        self.assertIn("w1:p3 --source pr-map --token pr=◈ harbor-ops --title ops chores",
+                      (self.root / "report.log").read_text().splitlines())
+
     def test_click_rejects_size_mismatch_and_invalid_ids(self):
         self.render("producer-1")
         self.assertIsNone(self.data("--demo", "clicked", "producer-1", "0", "11", "27", "12"))
@@ -118,6 +190,8 @@ class CLITests(unittest.TestCase):
         from rich.text import Text
         model = self.data("--demo", "model")
         model["nodes"]["feat/search"]["name"] = "文档搜索与索引"
+        model["other_repos"] = [{"repo": "example/lighthouse-operations", "open_prs": 12,
+                                 "agents": {f"w9:p{i}": None for i in range(5)}}]
         fixture = self.root / "model.json"
         fixture.write_text(json.dumps(model))
         for width in [1, 12, 26, 40]:

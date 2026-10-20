@@ -14,11 +14,13 @@
 //! The agent also names the session: Claude by its /rename title, else the title it gave the
 //! conversation, both re-appended to the transcript as it runs; Codex by its thread name in
 //! ~/.codex/session_index.jsonl.
+//!
+//! With several projects configured, `owner` decides which one an agent works for.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use fancy_regex::Regex as Fancy;
 use indexmap::IndexMap;
@@ -26,8 +28,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::config;
-use crate::model::Pr;
+use crate::config::{self, Project};
 use crate::sys;
 
 /// Bytes read from the end of a transcript.
@@ -114,8 +115,11 @@ impl Call {
         let text = self.text.split_whitespace().collect::<Vec<_>>().join(" ");
         let text = LEADING_CD
             .replace(&text, "")
-            .replace(&format!("{}/experiments/", config::get().workspace), "")
-            .replace(&format!("{}/", config::get().workspace), "");
+            .replace(
+                &format!("{}/experiments/", config::get().project().workspace),
+                "",
+            )
+            .replace(&format!("{}/", config::get().project().workspace), "");
         format!("{}: {text}", self.tool)
     }
 }
@@ -398,9 +402,23 @@ fn transcript_path(kind: &str, sid: &str) -> Option<PathBuf> {
     best.map(|(_, p)| p)
 }
 
+/// A transcript's last tool calls and the name its tail gives the session (read_tail).
+type Tail = (Vec<Call>, Option<String>);
+
+/// read_tail once per process: deciding which project an agent works for may locate it more
+/// than once.
+fn tail(kind: &str, path: &Path) -> Arc<Tail> {
+    static TAILS: LazyLock<Mutex<HashMap<PathBuf, Arc<Tail>>>> = LazyLock::new(Mutex::default);
+    let mut tails = TAILS.lock().unwrap();
+    tails
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(read_tail(kind, path)))
+        .clone()
+}
+
 /// The last WINDOW tool calls of a transcript, oldest first, and the name its tail gives the
 /// session (Claude only).
-fn read_tail(kind: &str, path: &Path) -> (Vec<Call>, Option<String>) {
+fn read_tail(kind: &str, path: &Path) -> Tail {
     let mut buf = Vec::new();
     let Ok(mut f) = std::fs::File::open(path) else {
         return (Vec::new(), None);
@@ -485,9 +503,9 @@ fn find_paths<'a>(
 
 /// Names after 'outputs/tasks/' at the workspace root, as the regex
 /// `(?:<workspace>/|(?<![\w/.-]))outputs/tasks/([\w.-]+)` finds them.
-fn root_tasks(text: &str) -> impl Iterator<Item = &str> {
+fn root_tasks<'a>(text: &'a str, workspace: &str) -> impl Iterator<Item = &'a str> {
     const ANCHOR: &str = "outputs/tasks/";
-    let root = format!("{}/", config::get().workspace);
+    let root = format!("{workspace}/");
     text.match_indices(ANCHOR).filter_map(move |(j, _)| {
         let before = &text[..j];
         if !before.ends_with(&root) && before.chars().next_back().is_some_and(path_char) {
@@ -501,8 +519,12 @@ fn root_tasks(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Maps tool-call text to (branch or '#N', grade) hits; see the module docs.
+/// Maps one project's tool-call text to (branch, grade) hits; see the module docs.
 pub struct Locator {
+    workspace: String,
+    checkout: String,
+    /// Where its agents work (config::Project::roots).
+    roots: Vec<(String, bool)>,
     /// (path, branch), longest path first; `rel` holds those in the workspace, relative to it.
     trees: Vec<(String, String)>,
     rel: Vec<(String, String)>,
@@ -510,12 +532,20 @@ pub struct Locator {
     task_re: Regex,
     pr_re: Regex,
     by_name: HashMap<String, String>,
-    open_numbers: HashSet<u64>,
+    /// {number: head branch} of the PRs on its map.
+    pr_heads: HashMap<u64, String>,
 }
 
 impl Locator {
-    pub fn new(trees: &[(String, String)], open_numbers: HashSet<u64>) -> Locator {
-        let aliases = config::get()
+    /// Args:
+    ///   trees: sources::worktrees of the project's checkout.
+    ///   pr_heads: {number: head branch} of the PRs on the project's map.
+    pub fn new(
+        project: &Project,
+        trees: &[(String, String)],
+        pr_heads: HashMap<u64, String>,
+    ) -> Locator {
+        let aliases = project
             .aliases
             .iter()
             .filter(|a| std::fs::symlink_metadata(a).is_ok_and(|m| m.file_type().is_symlink()))
@@ -526,19 +556,27 @@ impl Locator {
                 ))
             })
             .collect();
-        let under = format!("{}/", config::get().workspace);
+        let under = format!("{}/", project.workspace);
         let name = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
         Locator {
+            workspace: project.workspace.clone(),
+            checkout: project.checkout.clone(),
+            roots: project.roots(trees),
             trees: trees.to_vec(),
             rel: trees.iter().filter_map(|(p, b)| Some((p.strip_prefix(&under)?.to_string(), b.clone()))).collect(),
             aliases,
             task_re: Regex::new(r"^/outputs/tasks/([\w.-]+)").unwrap(),
             pr_re: Regex::new(&format!(
                 r"gh\s+pr\s+(?:view|comment|edit|diff|checks|ready|review|close|reopen|merge)\s+(\d+)|repos/{}/(?:pulls|issues)/(\d+)",
-                escape(&config::get().repo))).unwrap(),
+                escape(&project.repo))).unwrap(),
             by_name: trees.iter().map(|(p, b)| (name(p), b.clone())).collect(),
-            open_numbers,
+            pr_heads,
         }
+    }
+
+    /// How deep the project reaches around `dir` (config::claim).
+    pub fn claim(&self, dir: &str) -> Option<(usize, bool)> {
+        config::claim(&self.roots, dir)
     }
 
     /// Rewrites compatibility links to the paths they point at.
@@ -553,9 +591,9 @@ impl Locator {
     fn hits(&self, text: &str, act: bool) -> Vec<(String, u8)> {
         let text = self.normalize(text);
         let top = if act { CHANGED } else { READ };
-        let git = &config::get().checkout;
+        let git = &self.checkout;
         let git_rel = git
-            .strip_prefix(&format!("{}/", config::get().workspace))
+            .strip_prefix(&format!("{}/", self.workspace))
             .unwrap_or(git);
         let mut out = Vec::new();
         for (paths, standalone) in [(&self.trees, false), (&self.rel, true)] {
@@ -577,7 +615,7 @@ impl Locator {
                 }
             }
         }
-        for b in root_tasks(&text).filter_map(|n| self.by_name.get(n)) {
+        for b in root_tasks(&text, &self.workspace).filter_map(|n| self.by_name.get(n)) {
             out.push((b.clone(), READ));
         }
         for c in self.pr_re.captures_iter(&text) {
@@ -585,8 +623,8 @@ impl Locator {
                 .get(1)
                 .or(c.get(2))
                 .and_then(|m| m.as_str().parse::<u64>().ok());
-            if let Some(n) = n.filter(|n| self.open_numbers.contains(n)) {
-                out.push((format!("#{n}"), top));
+            if let Some(head) = n.and_then(|n| self.pr_heads.get(&n)) {
+                out.push((head.clone(), top));
             }
         }
         out
@@ -609,13 +647,42 @@ pub fn first_str<'a>(v: &'a Value, keys: &[&str]) -> &'a str {
         .unwrap_or("")
 }
 
-/// Places one herdr agent on branches and finds the name its agent gives the session; see the
-/// module docs.
-pub fn locate(
-    agent: &Value,
-    locator: &Locator,
-    pr_by_number: &HashMap<u64, Pr>,
-) -> (Place, Option<String>) {
+/// The project an agent works for, as an index into `locators` (one per configured project),
+/// or None.
+///
+/// The projects with the deepest root around its directory `dir` claim it, a worktree before
+/// a workspace or alias as deep: an agent in one repository's checkout works for that
+/// repository. A project claiming it through its workspace still takes it when its transcript
+/// places it on one of that project's branches (`placed`), as when it drives the project's
+/// worktrees from that checkout. An agent outside every project works for the first one that
+/// places it.
+pub fn owner(dir: &str, locators: &[Locator], placed: impl Fn(usize) -> bool) -> Option<usize> {
+    let claims: Vec<(usize, (usize, bool))> = locators
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| Some((i, l.claim(dir)?)))
+        .collect();
+    let Some(deepest) = claims.iter().map(|(_, (depth, _))| *depth).max() else {
+        return (0..locators.len()).find(|&i| placed(i));
+    };
+    let tied: Vec<(usize, bool)> = claims
+        .into_iter()
+        .filter(|(_, (depth, _))| *depth == deepest)
+        .map(|(i, (_, tree))| (i, tree))
+        .collect();
+    if let [(only, _)] = tied.as_slice() {
+        return Some(*only);
+    }
+    tied.iter()
+        .find(|&&(i, tree)| !tree && placed(i))
+        .or_else(|| tied.iter().find(|(_, tree)| *tree))
+        .or(tied.first())
+        .map(|&(i, _)| i)
+}
+
+/// Places one herdr agent on a project's branches and finds the name its agent gives the
+/// session; see the module docs.
+pub fn locate(agent: &Value, locator: &Locator) -> (Place, Option<String>) {
     let sid = agent
         .get("agent_session")
         .and_then(|s| s.get("value"))
@@ -628,10 +695,10 @@ pub fn locate(
     let mut events: Vec<(f64, String, u8)> = Vec::new();
     let mut evidence: IndexMap<String, Vec<(f64, String, String)>> = IndexMap::new();
     let mut commit_calls = Vec::new();
-    let (calls, transcript_name) = transcript
-        .as_deref()
-        .map(|p| read_tail(kind, p))
-        .unwrap_or_default();
+    let tail = transcript.as_deref().map(|p| tail(kind, p));
+    let (calls, transcript_name) = tail.as_deref().map_or((&[][..], None), |(calls, name)| {
+        (calls.as_slice(), name.clone())
+    });
     let name = match kind {
         "codex" => sid.and_then(|sid| CODEX_NAMES.get(sid)).cloned(),
         _ => transcript_name,
@@ -639,12 +706,6 @@ pub fn locate(
     for call in calls {
         let mut grades: IndexMap<String, u8> = IndexMap::new();
         for (key, grade) in locator.hits(&call.text, call.act) {
-            let key = match key.strip_prefix('#') {
-                Some(n) => pr_by_number[&n.parse::<u64>().unwrap()]
-                    .head_ref_name
-                    .clone(),
-                None => key,
-            };
             let best = grades.entry(key).or_insert(grade);
             *best = (*best).max(grade);
         }
@@ -673,7 +734,7 @@ pub fn locate(
             } else {
                 grades.keys().cloned().map(Some).collect()
             };
-            commit_calls.push((call.ts, branches, call.result));
+            commit_calls.push((call.ts, branches, call.result.clone()));
         }
     }
     let latest = |test: &dyn Fn(u8) -> bool| events.iter().rev().find(|e| test(e.2));
@@ -747,5 +808,40 @@ mod tests {
         let unsafe_name = name(&[titled("a\x1b[2Jb\nc"), renamed(" \t")]);
         assert_eq!(unsafe_name.as_deref(), Some("a [2Jb c"));
         assert_eq!(name(&[]), None);
+    }
+
+    #[test]
+    fn an_agent_works_for_the_deepest_project_unless_a_workspace_places_it() {
+        // 'o/tool' works from /w, the checkout of 'o/ws'; both keep worktrees in /w/experiments.
+        let project = |repo: &str| Project {
+            repo: repo.into(),
+            workspace: "/w".into(),
+            checkout: "/w".into(),
+            aliases: Vec::new(),
+            cache: PathBuf::new(),
+        };
+        let tree = |path: &str, branch: &str| (path.to_string(), branch.to_string());
+        let locators = [
+            Locator::new(
+                &project("o/tool"),
+                &[tree("/w/experiments/a", "feat/a")],
+                HashMap::new(),
+            ),
+            Locator::new(
+                &project("o/ws"),
+                &[tree("/w", "main"), tree("/w/experiments/b", "tools/b")],
+                HashMap::new(),
+            ),
+        ];
+        let owner = |dir: &str, placed: &[usize]| owner(dir, &locators, |i| placed.contains(&i));
+        // A worktree's agent works for its project, whatever its transcript names.
+        assert_eq!(owner("/w/experiments/a/src", &[1]), Some(0));
+        assert_eq!(owner("/w/experiments/b", &[0]), Some(1));
+        // In the checkout, for its repository unless the workspace's project places the agent.
+        assert_eq!(owner("/w", &[]), Some(1));
+        assert_eq!(owner("/w/reports", &[0]), Some(0));
+        // Outside every project, for the first that places it.
+        assert_eq!(owner("/elsewhere", &[1]), Some(1));
+        assert_eq!(owner("/elsewhere", &[]), None);
     }
 }

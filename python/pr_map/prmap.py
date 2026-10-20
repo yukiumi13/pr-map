@@ -7,14 +7,19 @@ from datetime import datetime
 
 BIN = os.environ.get("PRMAP_BIN") or shutil.which("prmap") or "prmap"
 DEMO = False
-# A clicked cell's target names a station, or a session's pane after this prefix.
+# A clicked cell's target names a station, a session's pane after PANE, or another configured
+# project's repository after PROJECT.
 PANE = ":pane:"
+PROJECT = ":project:"
+# The repository mapped instead of the one the Herdr session maps (the backend's PRMAP_PROJECT).
+REPO = None
 
 
 def _backend(*args):
     command = [BIN, *(["--demo"] if DEMO else []), *args]
+    env = os.environ | {"PRMAP_PROJECT": REPO} if REPO else None
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60, env=env)
         if result.returncode:
             return None
         return json.loads(result.stdout)
@@ -23,8 +28,10 @@ def _backend(*args):
 
 
 def load(force=False, frame=False):
-    """Load the accepted frame initially, then refresh live data on subsequent calls."""
-    frame_id = os.environ.get("HERDR_PANEL_FRAME_ID") if frame else None
+    """Load the accepted frame initially, then refresh live data on subsequent calls.
+
+    The frame holds the panel's own project, so another REPO always loads live."""
+    frame_id = os.environ.get("HERDR_PANEL_FRAME_ID") if frame and not REPO else None
     if frame_id:
         return _backend("model", "--frame", frame_id)
     return _backend("model", *(["--force"] if force else []))
@@ -35,7 +42,8 @@ def commits(branch):
 
 
 def clicked():
-    """The target of the panel cell a click opened us on: a station, PANE + pane id, or None."""
+    """The target of the panel cell a click opened us on: a station, PANE + pane id, PROJECT +
+    repository, or None."""
     frame_id = os.environ.get("HERDR_PANEL_FRAME_ID")
     cell = [os.environ.get(f"HERDR_PANEL_{k}") for k in ("COLUMN", "LINE", "WIDTH", "HEIGHT")]
     if not frame_id or not all(cell):

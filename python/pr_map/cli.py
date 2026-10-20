@@ -25,6 +25,9 @@ def main():
     # A click on a session's name goes straight to its pane, before the map would start.
     if target and target.startswith(prmap.PANE) and prmap.focus_pane(target[len(prmap.PANE):]):
         return
+    # A click on another project's row opens that project's map.
+    if target and target.startswith(prmap.PROJECT):
+        prmap.REPO, target = target[len(prmap.PROJECT):], None
     from .app import PRMapApp
     PRMapApp(popup=args.popup, clicked=target).run()
 

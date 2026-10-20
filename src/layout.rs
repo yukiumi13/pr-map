@@ -17,6 +17,9 @@ pub const ROOT: &str = ":repo";
 /// Prefix of a panel cell's target that names a session's pane instead of a station, as in
 /// ':pane:w1:p2'; a click there focuses that pane.
 pub const PANE: &str = ":pane:";
+/// Prefix of a panel cell's target that names another configured project, as in
+/// ':project:example/lighthouse'; a click there opens that project's map.
+pub const PROJECT: &str = ":project:";
 
 pub fn repo_name(repo: &str) -> &str {
     repo.rsplit('/').next().unwrap_or(repo)

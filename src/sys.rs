@@ -62,14 +62,18 @@ pub fn home() -> PathBuf {
 
 /// ~/.cache/pr-map, shared with the full map.
 pub fn cache_dir() -> PathBuf {
-    crate::config::get().cache.clone()
+    crate::config::get().project().cache.clone()
 }
 
 /// Writes a cache file atomically, so a concurrent reader never sees half of it.
 pub fn write_cache(name: &str, data: &[u8]) {
-    let dir = cache_dir();
+    write_cache_in(&cache_dir(), name, data);
+}
+
+/// write_cache into another project's cache directory.
+pub fn write_cache_in(dir: &Path, name: &str, data: &[u8]) {
     let tmp = dir.join(format!("{name}.{}.tmp", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir)
+    let _ = std::fs::create_dir_all(dir)
         .and_then(|_| std::fs::write(&tmp, data))
         .and_then(|_| std::fs::rename(&tmp, dir.join(name)));
 }
