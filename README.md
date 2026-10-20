@@ -1,6 +1,6 @@
 # PR Map
 
-Last updated on 2026-10-19 at commit `c64a442`.
+Last updated on 2026-10-19 at commit `c0ee915`.
 
 A terminal map of pull-request stacks and the coding agents working on them. See where a session
 is working, follow a stack, and open the full map from a small panel between Herdr's Spaces and
@@ -167,7 +167,7 @@ python3 -m pip install -c requirements.lock .
 PRMAP_TEST_BIN="$PWD/target/debug/prmap" python3 -m unittest discover -s tests -v
 ```
 
-The alpha candidate passed strict Rust formatting/clippy, three backend unit tests and eight
+The alpha candidate passed strict Rust formatting/clippy, six backend unit tests and eight
 isolated CLI/Textual tests. An isolated native Herdr test also verified a mouse click end to end,
 including the accepted frame id and the selected fictional station. Its fork passed 143 sidebar
 tests, 10 command-runner tests and 20 configuration/UI architecture checks.
