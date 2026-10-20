@@ -1,6 +1,6 @@
 # PR Map
 
-Last updated on 2026-10-19 at commit `e376e7f`.
+Last updated on 2026-10-20 at commit `aa93beb`.
 
 A terminal map of pull-request stacks and the coding agents working on them. See where a session
 is working, follow a stack, and open the full map from a small panel between Herdr's Spaces and
