@@ -52,8 +52,9 @@ from .style import (ACCENT, BAR, BG, DIM, FG, GRID, MUTED, PANEL, STAGE_COLORS, 
                    WARN, YOU, category, cell_width, cells, edge_style, fit)
 
 TZ = ZoneInfo("America/New_York")
-CW = 19           # cells per stack depth
-LABEL_W = CW - 3  # station label width; the branch junction sits right after it
+CW = 19           # cells per stack depth, at least; a column widens to its longest name
+MAX_CW = 44       # widest column; longer names keep both ends (fit_middle)
+LABEL = 3         # cells a column takes beyond its labels; the branch junction sits there
 LANE_H = 4        # line, '#N Stage', name, sessions
 GAP = 1           # blank rows between base branch families
 ROOT_Y = 1        # the repository's row; the YOU flag can stand above it
@@ -140,6 +141,7 @@ class MetroMap(ScrollView, can_focus=True):
         self.opened, self.closed = set(), set()   # stacks folded or unfolded by hand
         self.pos, self.kids, self.up, self.hidden = {}, {}, {}, {}
         self.rows, self.hit, self.xy, self.cat_colors, self.scolor = [], {}, {}, {}, {}
+        self.col_w = []
         self.width_cells = self.height_cells = 0
         self.drag, self.dragged = None, False
 
@@ -168,11 +170,17 @@ class MetroMap(ScrollView, can_focus=True):
         lane_y = [TOP + LANE_H * ln + GAP * family[ln] for ln in range(lanes)]
         self.pos[ROOT] = (-1, 0)
         self.name_w = BUS_W + min(20, max((len(b) for b in roots), default=4) + 2)
-        self.xy = {b: (self.name_w + col * CW, lane_y[ln]) for b, (ln, col) in self.pos.items()
+        depth = max((c for _, c in self.pos.values()), default=0)
+        # Each depth column is as wide as its longest station name needs, so names stay whole.
+        self.col_w = [CW] * (depth + 1)
+        for b, (_, col) in self.pos.items():
+            if b != ROOT and nodes[b]["kind"] != "base":
+                self.col_w[col] = max(self.col_w[col], min(MAX_CW, cells(nodes[b]["name"]) + LABEL))
+        col_x = [sum(self.col_w[:c]) for c in range(depth + 1)]
+        self.xy = {b: (self.name_w + col_x[col], lane_y[ln]) for b, (ln, col) in self.pos.items()
                    if b != ROOT}
         self.xy[ROOT] = (0, ROOT_Y)
-        depth = max((c for _, c in self.pos.values()), default=0)
-        self.width_cells = max(self.name_w + (depth + 1) * CW + 4, 80)
+        self.width_cells = max(self.name_w + sum(self.col_w) + 4, 80)
         self.height_cells = (lane_y[-1] + LANE_H if lane_y else TOP) + GAP
         self.cat_colors = model["colors"]["category"]
         self.scolor = model["colors"]["session"]
@@ -211,7 +219,7 @@ class MetroMap(ScrollView, can_focus=True):
             if p == ROOT or not kids:
                 continue
             xp, yp = self.xy[p]
-            xj = xp + CW - 2
+            xj = xp + self.col_w[self.pos[p][1]] - 2
             first = Style(color=self.edge_style(kids[0])[0], bgcolor=BG, bold=True)
             for i in reversed(range(len(kids))):
                 k = kids[i]
@@ -298,13 +306,14 @@ class MetroMap(ScrollView, can_focus=True):
             else:
                 put(x, y + 1, "local", Style(color=BG if sel else MUTED, bgcolor=ACCENT if sel else BG,
                                              italic=True), b)
-            put(x, y + 2, fit_middle(n["name"], LABEL_W),
+            label_w = self.col_w[self.pos[b][1]] - LABEL
+            put(x, y + 2, fit_middle(n["name"], label_w),
                 Style(color=MUTED if dead or not p else FG if sel else DIM, bgcolor=BG,
                       strike=dead), b)
             # The YOU flag stands for this pane's own session.
-            chips(b, x, x + LABEL_W, y + 3)
+            chips(b, x, x + label_w, y + 3)
             for yy in range(y + 1, y + 3):
-                for xx in range(x, x + LABEL_W):
+                for xx in range(x, x + label_w):
                     hit.setdefault((yy, xx), b)
 
         you = layout.at(mine, nodes) if mine else None
@@ -357,7 +366,8 @@ class MetroMap(ScrollView, can_focus=True):
         if scroll:
             # After the next refresh, so the first selection scrolls with the real widget size.
             x, y = self.xy[branch]
-            region = Region(max(0, x - self.name_w), max(0, y - 2), CW + self.name_w, LANE_H + 3)
+            region = Region(max(0, x - self.name_w), max(0, y - 2),
+                            self.col_w[self.pos[branch][1]] + self.name_w, LANE_H + 3)
             self.call_after_refresh(self.scroll_to_region, region, animate=False)
         self.post_message(self.Selected(branch, pane, jump))
 
